@@ -1,0 +1,76 @@
+{
+  "experiment": {
+    "type": "selective",
+    "seed": 42,
+    "output_dir": "runs/selective_faithful"
+  },
+  "dataset": {
+    "name": "faithful",
+    "path": "data/raw/faithful.csv",
+    "target": "waiting",
+    "features": [
+      "eruptions"
+    ],
+    "split": {
+      "strategy": "random",
+      "params": {
+        "train": 0.6,
+        "val": 0.2
+      }
+    },
+    "standardize": true
+  },
+  "pseudo_ground_truth": {
+    "name": "conditional_kde",
+    "params": {
+      "bandwidth": 0.5
+    }
+  },
+  "model": {
+    "name": "mdn",
+    "params": {
+      "hidden_sizes": [
+        64,
+        64
+      ],
+      "num_components": 5,
+      "epochs": 5
+    }
+  },
+  "uncertainty": {
+    "measures": [
+      {
+        "name": "variance",
+        "params": {}
+      },
+      {
+        "name": "differential_entropy",
+        "params": {
+          "grid_points": 128
+        }
+      },
+      {
+        "name": "crps_proxy",
+        "params": {}
+      }
+    ]
+  },
+  "correlation": {
+    "enabled": true,
+    "method": [
+      "pearson",
+      "spearman"
+    ],
+    "output_dir": "runs/_correlation"
+  },
+  "metrics": {
+    "primary": [
+      "moae",
+      "mose"
+    ],
+    "distributional": [
+      "nll",
+      "crps"
+    ]
+  }
+}

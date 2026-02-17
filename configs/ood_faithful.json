@@ -1,0 +1,65 @@
+{
+  "experiment": {
+    "type": "ood",
+    "seed": 7,
+    "output_dir": "runs/ood_faithful"
+  },
+  "dataset": {
+    "name": "faithful",
+    "path": "data/raw/faithful.csv",
+    "target": "eruptions",
+    "features": [
+      "waiting"
+    ],
+    "split": {
+      "strategy": "by_threshold_band",
+      "params": {
+        "low": 63,
+        "high": 72
+      }
+    },
+    "standardize": true
+  },
+  "pseudo_ground_truth": {
+    "name": "gmm",
+    "params": {
+      "n_components": 2
+    }
+  },
+  "model": {
+    "name": "kde",
+    "params": {
+      "bandwidth": 0.4
+    }
+  },
+  "uncertainty": {
+    "measures": [
+      {
+        "name": "variance",
+        "params": {}
+      },
+      {
+        "name": "differential_entropy",
+        "params": {}
+      }
+    ]
+  },
+  "correlation": {
+    "enabled": true,
+    "method": [
+      "pearson",
+      "spearman"
+    ],
+    "output_dir": "runs/_correlation"
+  },
+  "metrics": {
+    "primary": [
+      "moae",
+      "mose"
+    ],
+    "ood": [
+      "auroc",
+      "auprc"
+    ]
+  }
+}

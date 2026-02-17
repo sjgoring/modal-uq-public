@@ -1,0 +1,91 @@
+{
+  "experiment": {
+    "type": "active_learning",
+    "seed": 13,
+    "output_dir": "runs/al_forestfires",
+    "al": {
+      "init_size": 40,
+      "batch": 10,
+      "rounds": 3,
+      "acquisition": "modal_entropy"
+    }
+  },
+  "dataset": {
+    "name": "forestfires",
+    "path": "data/raw/forestfires.csv",
+    "target": "area",
+    "features": [
+      "temp",
+      "RH",
+      "wind",
+      "rain",
+      "FFMC",
+      "DMC",
+      "DC",
+      "ISI",
+      "X",
+      "Y"
+    ],
+    "split": {
+      "strategy": "random",
+      "params": {
+        "train": 0.6,
+        "val": 0.2
+      }
+    },
+    "standardize": true
+  },
+  "pseudo_ground_truth": {
+    "name": "gmm",
+    "params": {
+      "n_components": 3
+    }
+  },
+  "model": {
+    "name": "quantile_nn",
+    "params": {
+      "quantiles": [
+        0.1,
+        0.5,
+        0.9
+      ],
+      "epochs": 3
+    }
+  },
+  "uncertainty": {
+    "measures": [
+      {
+        "name": "variance",
+        "params": {}
+      },
+      {
+        "name": "differential_entropy",
+        "params": {
+          "grid_points": 128
+        }
+      },
+      {
+        "name": "nll",
+        "params": {}
+      }
+    ]
+  },
+  "correlation": {
+    "enabled": true,
+    "method": [
+      "pearson",
+      "spearman"
+    ],
+    "output_dir": "runs/_correlation"
+  },
+  "metrics": {
+    "primary": [
+      "moae",
+      "mose"
+    ],
+    "distributional": [
+      "nll",
+      "crps"
+    ]
+  }
+}
