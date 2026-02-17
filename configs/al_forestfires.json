@@ -7,7 +7,7 @@
       "init_size": 40,
       "batch": 10,
       "rounds": 3,
-      "acquisition": "modal_entropy"
+      "acquisition": "variance"
     }
   },
   "dataset": {
@@ -42,13 +42,14 @@
     }
   },
   "model": {
-    "name": "quantile_nn",
+    "name": "mdn_mc_dropout",
     "params": {
-      "quantiles": [
-        0.1,
-        0.5,
-        0.9
+      "hidden_sizes": [
+        128,
+        128
       ],
+      "num_components": 5,
+      "dropout_p": 0.1,
       "epochs": 3
     }
   },
@@ -56,17 +57,21 @@
     "measures": [
       {
         "name": "variance",
-        "params": {}
+        "params": {
+          "decomposition": "total"
+        }
+      },
+      {
+        "name": "variance",
+        "params": {
+          "decomposition": "epistemic"
+        }
       },
       {
         "name": "differential_entropy",
         "params": {
           "grid_points": 128
         }
-      },
-      {
-        "name": "nll",
-        "params": {}
       }
     ]
   },

@@ -37,6 +37,3 @@ class ActiveLearning(ExperimentBase):
                 out_dir = corr_cfg.get('output_dir', 'runs/_correlation')
                 save_correlation_artifacts(df_scores, corrs, out_dir + '/al_pool')
         self.results = {'history': history}
-
-    def report(self):
-        pass

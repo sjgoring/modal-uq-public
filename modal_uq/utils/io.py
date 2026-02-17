@@ -1,7 +1,6 @@
 
 from pathlib import Path
-import json
-import pickle
+import json, pickle
 
 def read_json(path):
     with open(path, 'r') as f:

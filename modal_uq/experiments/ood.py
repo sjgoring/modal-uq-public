@@ -18,6 +18,3 @@ class OODExperiment(ExperimentBase):
                 save_correlation_artifacts(df_id,  corrs_id,  out_dir + '/id')
                 save_correlation_artifacts(df_ood, corrs_ood, out_dir + '/ood')
         self.results = {}
-
-    def report(self):
-        pass

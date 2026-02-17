@@ -22,8 +22,7 @@ def correlation_suite(df_scores, methods=("pearson","spearman","kendall","distan
             corrs[m] = _distance_corr_matrix(df_scores.values, list(df_scores.columns))
         else:
             corrs[m] = df_scores.corr(method=m)
-    cis = None
-    return corrs, cis
+    return corrs, None
 
 
 def _distance_corr_matrix(X, cols):

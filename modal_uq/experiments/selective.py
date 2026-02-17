@@ -19,6 +19,3 @@ class SelectivePrediction(ExperimentBase):
                 out_dir = corr_cfg.get('output_dir', 'runs/_correlation')
                 save_correlation_artifacts(df_scores, corrs, out_dir)
         self.results = {'y_mode_true': y_mode_true, 'y_mode_pred': y_mode_pred}
-
-    def report(self):
-        pass

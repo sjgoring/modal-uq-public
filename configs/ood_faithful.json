@@ -27,20 +27,34 @@
     }
   },
   "model": {
-    "name": "kde",
+    "name": "ensemble",
     "params": {
-      "bandwidth": 0.4
+      "base_model": "mdn",
+      "base_params": {
+        "hidden_sizes": [
+          64,
+          64
+        ],
+        "num_components": 5,
+        "epochs": 5
+      },
+      "n_members": 5,
+      "bootstrap": true
     }
   },
   "uncertainty": {
     "measures": [
       {
         "name": "variance",
-        "params": {}
+        "params": {
+          "decomposition": "epistemic"
+        }
       },
       {
-        "name": "differential_entropy",
-        "params": {}
+        "name": "variance",
+        "params": {
+          "decomposition": "aleatoric"
+        }
       }
     ]
   },

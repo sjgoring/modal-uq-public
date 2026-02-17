@@ -45,7 +45,7 @@ class QuantileNN(ModelBase):
         torch, nn = self._ensure_torch()
         with torch.no_grad():
             X_t = torch.tensor(X, dtype=torch.float32)
-            qy = self._net(X_t).numpy()  # [N,Q]
+            qy = self._net(X_t).numpy()
         N, G = X.shape[0], len(y_grid)
         pdf = np.zeros((N, G))
         for i in range(N):

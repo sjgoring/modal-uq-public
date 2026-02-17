@@ -6,7 +6,6 @@ def nll_from_density_at_truth(density, y_grid, y_true):
     p = density[np.arange(len(y_true)), idx] + 1e-12
     return -np.log(p)
 
-# Placeholder numerical CRPS for grid densities
 def crps_from_cdf_grid(cdf, y_grid, y_true):
     idx = np.abs(y_grid[None,:] - y_true[:,None]).argmin(axis=1)
     crps = []

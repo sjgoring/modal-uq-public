@@ -27,13 +27,14 @@
     }
   },
   "model": {
-    "name": "mdn",
+    "name": "mdn_mc_dropout",
     "params": {
       "hidden_sizes": [
         64,
         64
       ],
       "num_components": 5,
+      "dropout_p": 0.1,
       "epochs": 5
     }
   },
@@ -41,17 +42,21 @@
     "measures": [
       {
         "name": "variance",
-        "params": {}
-      },
-      {
-        "name": "differential_entropy",
         "params": {
-          "grid_points": 128
+          "decomposition": "total"
         }
       },
       {
-        "name": "crps_proxy",
-        "params": {}
+        "name": "variance",
+        "params": {
+          "decomposition": "aleatoric"
+        }
+      },
+      {
+        "name": "variance",
+        "params": {
+          "decomposition": "epistemic"
+        }
       }
     ]
   },

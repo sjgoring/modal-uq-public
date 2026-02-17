@@ -37,7 +37,6 @@ class DatasetSpec(ABC):
             return X_tr, y_tr, X_va, y_va, X_te, y_te
         elif strat == 'by_threshold_band':
             low = split_cfg['params']['low']; high = split_cfg['params']['high']
-            # Treat band as ID (train+val); outside as OOD test
             mask = (X.squeeze() >= low) & (X.squeeze() <= high)
             X_id, y_id = X[mask], y[mask]
             X_ood, y_ood = X[~mask], y[~mask]
