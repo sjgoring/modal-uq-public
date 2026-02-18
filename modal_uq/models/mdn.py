@@ -44,8 +44,10 @@ class MDN(ModelBase):
                 xb = X_t[i:i+self.batch_size]; yb = y_t[i:i+self.batch_size]
                 out = net(xb)
                 pi, mu, sigma = split(out)
-                comp = torch.distributions.Normal(mu, sigma)
-                log_prob = torch.logsumexp(torch.log(pi + 1e-12) + comp.log_prob(yb).squeeze(2), dim=1)
+                comp = torch.distributions.Normal(mu, sigma)  # mu,sigma: [B,K]
+                yb_expanded = yb.expand_as(mu)                # [B,K]
+                log_comp = comp.log_prob(yb_expanded)         # [B,K]
+                log_prob = torch.logsumexp(torch.log(pi + 1e-12) + log_comp, dim=1)  # [B]
                 loss = -log_prob.mean()
                 opt.zero_grad(); loss.backward(); opt.step()
         self._y_min = float(y.min()); self._y_max = float(y.max())

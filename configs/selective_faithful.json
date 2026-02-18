@@ -9,7 +9,7 @@
     "path": "data/raw/faithful.csv",
     "target": "waiting",
     "features": [
-      "eruptions"
+      "duration"
     ],
     "split": {
       "strategy": "random",
@@ -34,32 +34,17 @@
         64
       ],
       "num_components": 5,
-      "dropout_p": 0.1,
+      "dropout_p" : 0.1,
       "epochs": 5
     }
   },
   "uncertainty": {
-    "measures": [
-      {
-        "name": "variance",
-        "params": {
-          "decomposition": "total"
-        }
-      },
-      {
-        "name": "variance",
-        "params": {
-          "decomposition": "aleatoric"
-        }
-      },
-      {
-        "name": "variance",
-        "params": {
-          "decomposition": "epistemic"
-        }
-      }
-    ]
-  },
+  "measures": [
+    { "name": "variance", "params": { "decomposition": "total",     "label": "variance_total" } },
+    { "name": "variance", "params": { "decomposition": "aleatoric", "label": "variance_aleatoric" } },
+    { "name": "variance", "params": { "decomposition": "epistemic", "label": "variance_epistemic" } }
+  ]
+},
   "correlation": {
     "enabled": true,
     "method": [

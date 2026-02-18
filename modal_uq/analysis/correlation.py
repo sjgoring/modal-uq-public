@@ -6,13 +6,28 @@ from ..utils import plot as plot_utils
 
 
 def compute_uncertainty_scores(measure_specs, model, X, y=None):
-    records = {}
+    import pandas as pd
+    from ..registry import build
+
+    out = {}
     for spec in measure_specs:
-        u = build('uncertainty', spec['name'], **spec.get('params', {}))
-        needs_y = spec['name'] in {'nll'}
-        s = u.score(model, X, y if needs_y else None)
-        records[spec['name']] = s
-    return pd.DataFrame(records)
+        # 1) Copy params so we can pop without mutating the original
+        params = dict(spec.get('params', {}))
+
+        # 2) Pop the optional label so it doesn't get passed to the constructor
+        label = params.pop('label', None)
+
+        # 3) Build the scorer with the cleaned params
+        u = build('uncertainty', spec['name'], **params)
+
+        # 4) Compute the score
+        s = u.score(model, X, y)
+
+        # 5) Name the column: label (if provided) else measure name
+        key = label if label else spec['name']
+        out[key] = s
+
+    return pd.DataFrame(out)
 
 
 def correlation_suite(df_scores, methods=("pearson","spearman","kendall","distance"), bootstrap=None):
