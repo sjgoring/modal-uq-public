@@ -5,6 +5,20 @@ from ..registry import register
 
 @register('uncertainty','quest')
 class QUESTUncertainty(UncertaintyBase):
+    """
+    QUEST uncertainty using Highest Density Regions (HDR).
+    
+    Computes the Lebesgue measure (total length) of the highest density region
+    containing (1 - alpha) probability mass.
+    
+    Uses dual marginalization contexts for uncertainty decomposition:
+    - total:      Lebesgue measure of HDR from predict context
+    - aleatoric:  Lebesgue measure of HDR from approximate context (true DGP)
+    - epistemic:  TBD - HDR-based measure does not naturally decompose via subtraction
+    
+    The epistemic component for HDR-based measures requires domain-specific analysis
+    and is left as a stub for future implementation.
+    """
     def __init__(self, alpha, decomposition='total', grid_points=512, y_pad=1.0, n_param_samples=20):
         assert decomposition in {'total','aleatoric','epistemic'}
         self.alpha = alpha
@@ -118,16 +132,53 @@ class QUESTUncertainty(UncertaintyBase):
         return threshold, mask
     
     def score(self, model, X, y_true=None):
-        y_grid = model.default_y_grid(X)
+        """Compute QUEST uncertainty using predict and approximate contexts.
         
-        dens_s = model.predict_density_samples(X, y_grid, n_samples=self.n_param_samples)   # [S,N,G]
-        dens_mix = dens_s.mean(axis=0)                                   # [N,G]
-
-        threshold, mask = self._hdr_from_density(dens_mix, y_grid, self.alpha)
-        lebesgue_measure = self._lebesgue_measure_hdr(mask, y_grid)
+        Returns Lebesgue measure of the HDR. Decomposition:
+        - aleatoric: HDR measure from approximate context
+        - total: HDR measure from predict context
+        - epistemic: NotImplementedError (TBD - domain-specific analysis needed)
+        """
+        y_grid = model.default_y_grid(X, grid_points=self.grid_points, y_pad=self.y_pad)
         
-        # Return the Lebesgue measure of the highest density regions as the uncertainty score.
+        try:
+            # Sample densities from both contexts
+            dens_pred = model.predict_density_samples(X, y_grid, context='predict', n_samples=self.n_param_samples)   # [S,N,G]
+            dens_approx = model.predict_density_samples(X, y_grid, context='approximate', n_samples=self.n_param_samples)   # [S,N,G]
+            
+            # Compute HDR from both contexts
+            threshold_pred, mask_pred = self._hdr_from_density(dens_pred, y_grid, self.alpha)
+            threshold_approx, mask_approx = self._hdr_from_density(dens_approx, y_grid, self.alpha)
+            
+            # Compute Lebesgue measures
+            lebesgue_pred = self._lebesgue_measure_hdr(mask_pred, y_grid)   # [N]
+            lebesgue_approx = self._lebesgue_measure_hdr(mask_approx, y_grid)  # [N]
+            
+            aleatoric = lebesgue_approx
+            total = lebesgue_pred
+            
+        except Exception:
+            # Deterministic fallback
+            dens_pred = model.predict_density(X, y_grid, context='predict')
+            dens_approx = model.predict_density(X, y_grid, context='approximate')
+            
+            threshold_pred, mask_pred = self._hdr_from_density(dens_pred, y_grid, self.alpha)
+            threshold_approx, mask_approx = self._hdr_from_density(dens_approx, y_grid, self.alpha)
+            
+            lebesgue_pred = self._lebesgue_measure_hdr(mask_pred, y_grid)
+            lebesgue_approx = self._lebesgue_measure_hdr(mask_approx, y_grid)
+            
+            aleatoric = lebesgue_approx
+            total = lebesgue_pred
+        
+        # Return depending on decomposition
         if self.decomposition == 'epistemic':
-            return np.zeros_like(lebesgue_measure)  # epistemic component is not defined for HDR measure (yet)
-        else:
-            return lebesgue_measure
+            raise NotImplementedError(
+                "Epistemic decomposition for QUEST is not yet implemented. "
+                "HDR-based measures do not naturally decompose via simple difference. "
+                "Epistemic uncertainty would require domain-specific analysis of threshold/structure differences."
+            )
+        elif self.decomposition == 'aleatoric':
+            return aleatoric
+        else:  # total
+            return total

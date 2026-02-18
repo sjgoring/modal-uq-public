@@ -6,7 +6,8 @@ from ..registry import register
 
 @register('model','kde')
 class ConditionalKDEModel(ModelBase):
-    def __init__(self, bandwidth=0.5, kernel='gaussian'):
+    def __init__(self, bandwidth=0.5, kernel='gaussian', marginalization=None):
+        super().__init__(marginalization=marginalization)
         self.bandwidth = bandwidth; self.kernel = kernel
         self._kde = None
         self._y_min = None; self._y_max = None
@@ -16,7 +17,8 @@ class ConditionalKDEModel(ModelBase):
         self._kde = KernelDensity(bandwidth=self.bandwidth, kernel=self.kernel).fit(XY)
         self._y_min = float(y.min()); self._y_max = float(y.max())
 
-    def predict_density(self, X, y_grid):
+    def predict_density(self, X, y_grid, context='predict'):
+        # Deterministic model: context parameter is ignored
         N, G = X.shape[0], len(y_grid)
         out = np.zeros((N, G))
         for i in range(N):

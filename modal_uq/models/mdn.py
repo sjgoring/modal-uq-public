@@ -5,7 +5,8 @@ from ..registry import register
 
 @register('model','mdn')
 class MDN(ModelBase):
-    def __init__(self, input_dim=None, hidden_sizes=(64,64), num_components=5, lr=1e-3, epochs=200, batch_size=128):
+    def __init__(self, input_dim=None, hidden_sizes=(64,64), num_components=5, lr=1e-3, epochs=200, batch_size=128, marginalization=None):
+        super().__init__(marginalization=marginalization)
         self.input_dim = input_dim
         self.hidden_sizes = hidden_sizes
         self.num_components = num_components
@@ -52,7 +53,8 @@ class MDN(ModelBase):
                 opt.zero_grad(); loss.backward(); opt.step()
         self._y_min = float(y.min()); self._y_max = float(y.max())
 
-    def predict_density(self, X, y_grid):
+    def predict_density(self, X, y_grid, context='predict'):
+        # Deterministic model: context parameter is ignored
         torch, nn = self._ensure_torch()
         with torch.no_grad():
             X_t = torch.tensor(X, dtype=torch.float32)

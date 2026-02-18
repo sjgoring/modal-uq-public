@@ -50,7 +50,12 @@
       ],
       "num_components": 5,
       "dropout_p": 0.1,
-      "epochs": 3
+      "epochs": 3,
+      "marginalization": {
+        "predict": "bma_expected",
+        "approximate": "point_estimate",
+        "point_estimate_criterion": "mle"
+      }
     }
   },
   "uncertainty": {

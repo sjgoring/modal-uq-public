@@ -39,7 +39,12 @@
         "epochs": 5
       },
       "n_members": 5,
-      "bootstrap": true
+      "bootstrap": true,
+      "marginalization": {
+        "predict": "bma_expected",
+        "approximate": "point_estimate",
+        "point_estimate_criterion": "mle"
+      }
     }
   },
   "uncertainty": {

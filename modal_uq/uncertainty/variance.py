@@ -7,12 +7,17 @@ class PredictiveVariance(UncertaintyBase):
     """
     Predictive variance with optional decomposition.
 
-    - total:      Var[Y | x]
-    - aleatoric:  E_θ[ Var(Y | x, θ) ]
-    - epistemic:  Var_θ[ E(Y | x, θ) ]
+    Uses dual marginalization contexts for uncertainty decomposition:
+    
+    - total:      Var[Y | x] computed from predict context
+    - aleatoric:  E_θ[ Var(Y | x, θ) ] from approximate context (true DGP with known params)
+    - epistemic:  total - aleatoric (difference from approximate to predict)
 
-    Uses model.predict_density_samples(X, y_grid, n_samples)-> [S,N,G] if available;
-    otherwise falls back to deterministic density [N,G] (epistemic=0).
+    The approximate context represents the true data generating process with point-estimate
+    parameters (minimal epistemic uncertainty), while predict includes parameter uncertainty.
+    
+    Requires model.predict_density_samples(X, y_grid, context='predict'|'approximate', n_samples)
+    to return [S,N,G] densities. Falls back to deterministic density if unavailable.
     """
     def __init__(self, decomposition='total', grid_points=512, y_pad=1.0, n_param_samples=20):
         assert decomposition in {'total','aleatoric','epistemic'}
@@ -51,33 +56,80 @@ class PredictiveVariance(UncertaintyBase):
         return Ey, Var
 
     def score(self, model, X, y_true=None):
+        """Compute variance using predict and approximate contexts.
+        
+        Uncertainty components (NOT additive decomposition):
+        - aleatoric:  Var computed from approximate context (true DGP with known params)
+        - total:      Var computed from predict context (includes parameter uncertainty)
+        - epistemic:  NOT DEFINED - decomposition depends on marginalization strategy choice
+        
+        Note: Epistemic uncertainty cannot be universally defined as (total - aleatoric) because
+        the relationship between these quantities depends on the specific marginalization strategies
+        chosen for predict vs. approximate contexts. Use separate measures if strict decomposition
+        semantics are required.
+        """
         # Build a default grid per model (shared across X in this batch)
         y_grid = model.default_y_grid(X, grid_points=self.grid_points, y_pad=self.y_pad)
 
         try:
-            # Monte-Carlo parameter samples: [S,N,G]
-            dens_s = model.predict_density_samples(X, y_grid, n_samples=self.n_param_samples)
-            if dens_s.ndim != 3:
+            # Sample from both prediction and approximation contexts
+            dens_pred = model.predict_density_samples(X, y_grid, context='predict', n_samples=self.n_param_samples)  # [S,N,G]
+            dens_approx = model.predict_density_samples(X, y_grid, context='approximate', n_samples=self.n_param_samples)  # [S,N,G]
+            
+            if dens_pred.ndim != 3 or dens_approx.ndim != 3:
                 raise ValueError("predict_density_samples must return [S,N,G]")
 
-            Ey_s, Var_s = self._moments_from_density(dens_s, y_grid)  # [S,N] each
+            # Compute variances from both contexts
+            Ey_pred_s, Var_pred_s = self._moments_from_density(dens_pred, y_grid)  # [S,N] each
+            Ey_approx_s, Var_approx_s = self._moments_from_density(dens_approx, y_grid)  # [S,N] each
 
-            # Decomposition:
-            aleatoric = Var_s.mean(axis=0)    # E_theta[Var(Y | x, θ)]     -> [N]
-            epistemic = Ey_s.var(axis=0)      # Var_theta[E(Y | x, θ)]     -> [N]
-            total     = aleatoric + epistemic # Var(Y | x)                 -> [N]
+            # Variance components:
+            aleatoric = Var_approx_s.mean(axis=0)    # E_theta[Var(Y | x, θ)] from approximate  -> [N]
+            total = Ey_pred_s.var(axis=0) + Var_pred_s.mean(axis=0)  # Var(Y | x) from predict -> [N]
 
         except Exception:
-            # Deterministic density fallback: [N,G]   (epistemic = 0)
-            dens = model.predict_density(X, y_grid)
-            Ey, Var = self._moments_from_density(dens, y_grid)  # [N]
-            aleatoric = Var
-            epistemic = np.zeros_like(aleatoric)
-            total = aleatoric
+            # Deterministic density fallback: [N,G]
+            dens_pred = model.predict_density(X, y_grid, context='predict')
+            dens_approx = model.predict_density(X, y_grid, context='approximate')
+            
+            Ey_pred, Var_pred = self._moments_from_density(dens_pred, y_grid)  # [N]
+            Ey_approx, Var_approx = self._moments_from_density(dens_approx, y_grid)  # [N]
+            
+            aleatoric = Var_approx
+            total = Var_pred
 
         if self.decomposition == 'aleatoric':
             return aleatoric
         elif self.decomposition == 'epistemic':
+            # Epistemic variance: parameter uncertainty in our model (predict context)
+            # Var_θ_p[E[Y | x, θ_p]] - variance of predicted means across parameter samples
+            #
+            # The computation depends on marginalization strategies:
+            # Case 1: No expectation (both point/bma) → epistemic = 0
+            # Case 2: 1 expectation (predict posterior) → epistemic = var(Ey_pred_s)
+            # Case 3: 1 expectation (approx posterior) → epistemic = 0 (no parameter variance in predict)
+            # Case 4: 2 expectations (both posterior) → epistemic = var(Ey_pred_s)
+            #
+            # Note: epistemic variance depends on predict context (parameter uncertainty in our model),
+            # not on approximate context (which only affects aleatoric).
+            
+            ## Not implemented!
+
+
+
+            # try:
+            #     S_pred = Ey_pred_s.shape[0]
+                
+            #     if S_pred > 1:
+            #         # Posterior_weighted: compute variance across parameter samples
+            #         epistemic = Ey_pred_s.var(axis=0)  # Var_θ_p[E[Y | x, θ_p]] -> [N]
+            #     else:
+            #         # Point estimate or bma_expected: no parameter variance
+            #         epistemic = np.zeros_like(aleatoric)
+                    
+            # except NameError:
+            #     # Fallback for deterministic case: no parameter uncertainty
+            epistemic = np.zeros_like(aleatoric)
             return epistemic
         else:
             return total

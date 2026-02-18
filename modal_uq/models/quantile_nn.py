@@ -5,7 +5,8 @@ from ..registry import register
 
 @register('model','quantile_nn')
 class QuantileNN(ModelBase):
-    def __init__(self, quantiles=(0.1,0.5,0.9), hidden_sizes=(128,128), lr=1e-3, epochs=200, batch_size=128):
+    def __init__(self, quantiles=(0.1,0.5,0.9), hidden_sizes=(128,128), lr=1e-3, epochs=200, batch_size=128, marginalization=None):
+        super().__init__(marginalization=marginalization)
         self.quantiles = list(quantiles)
         self.hidden_sizes = hidden_sizes
         self.lr = lr; self.epochs = epochs; self.batch_size = batch_size
@@ -41,7 +42,8 @@ class QuantileNN(ModelBase):
                 opt.zero_grad(); loss.backward(); opt.step()
         self._y_min = float(y.min()); self._y_max = float(y.max())
 
-    def predict_density(self, X, y_grid):
+    def predict_density(self, X, y_grid, context='predict'):
+        # Deterministic model: context parameter is ignored
         torch, nn = self._ensure_torch()
         with torch.no_grad():
             X_t = torch.tensor(X, dtype=torch.float32)
