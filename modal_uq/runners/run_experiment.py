@@ -14,6 +14,8 @@ from ..models.mdn_mc_dropout import MDN_MCDropout
 from ..models.mdn import MDN
 
 from ..uncertainty.variance import PredictiveVariance
+from ..uncertainty.differential_entropy import DifferentialEntropy
+from ..uncertainty.quest import QUESTUncertainty
 
 register('experiment','selective')(SelectivePrediction)
 register('experiment','ood')(OODExperiment)

@@ -41,8 +41,10 @@
   "uncertainty": {
   "measures": [
     { "name": "variance", "params": { "decomposition": "total",     "label": "variance_total" } },
-    { "name": "variance", "params": { "decomposition": "aleatoric", "label": "variance_aleatoric" } },
-    { "name": "variance", "params": { "decomposition": "epistemic", "label": "variance_epistemic" } }
+    { "name": "differential_entropy", "params": { "decomposition": "total",     "label": "differential_entropy_total" } },
+    { "name": "quest", "params": { "decomposition": "total",     "label": "quest_total_5%" , "alpha":0.05} },
+    { "name": "quest", "params": { "decomposition": "total",     "label": "quest_total_10%" , "alpha":0.10} },
+    { "name": "quest", "params": { "decomposition": "total",     "label": "quest_total_20%" , "alpha":0.20} }
   ]
 },
   "correlation": {
