@@ -12,6 +12,8 @@ from ..pgt.conditional_kde import ConditionalKDE
 
 from ..models.mdn_mc_dropout import MDN_MCDropout
 from ..models.mdn import MDN
+from ..models.ensemble import Ensemble
+from ..models.bnn_vi import BayesianNNVI
 
 from ..uncertainty.variance import PredictiveVariance
 from ..uncertainty.differential_entropy import DifferentialEntropy

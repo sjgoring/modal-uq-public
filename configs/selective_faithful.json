@@ -27,29 +27,30 @@
     }
   },
   "model": {
-    "name": "mdn_mc_dropout",
+    "name": "bnn_vi",
     "params": {
-      "hidden_sizes": [
-        64,
-        64
-      ],
-      "num_components": 5,
-      "dropout_p" : 0.1,
-      "epochs": 5,
+      "hidden_dims": [64, 64],
+      "n_components": 2,
+      "prior_sigma": 1.0,
+      "n_mc_samples": 20,
+      "n_epochs": 100,
+      "batch_size": 32,
       "marginalization": {
-        "predict": "bma_expected",
-        "approximate": "point_estimate",
-        "point_estimate_criterion": "mle"
+      "predict": "bma_expected",         
+      "approximate": "point_estimate",   
+      "point_estimate_criterion": "mean" 
       }
     }
   },
   "uncertainty": {
   "measures": [
-    { "name": "variance", "params": { "decomposition": "total",     "label": "variance_total" } },
     { "name": "differential_entropy", "params": { "decomposition": "total",     "label": "differential_entropy_total" } },
-    { "name": "quest", "params": { "decomposition": "total",     "label": "quest_total_5%" , "alpha":0.05} },
+    { "name": "differential_entropy", "params": { "decomposition": "aleatoric",     "label": "differential_entropy_aleatoric" } },
+    { "name": "differential_entropy", "params": { "decomposition": "epistemic",     "label": "differential_entropy_epistemic" } },
     { "name": "quest", "params": { "decomposition": "total",     "label": "quest_total_10%" , "alpha":0.10} },
-    { "name": "quest", "params": { "decomposition": "total",     "label": "quest_total_20%" , "alpha":0.20} }
+    { "name": "quest", "params": { "decomposition": "aleatoric",     "label": "quest_aleatoric_10%" , "alpha":0.10} },
+    { "name": "quest", "params": { "decomposition": "epistemic",     "label": "quest_epistemic_10%" , "alpha":0.10} },
+    { "name": "variance", "params": { "decomposition": "total",     "label": "variance_total" } }
   ]
 },
   "correlation": {

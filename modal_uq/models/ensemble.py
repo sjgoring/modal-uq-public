@@ -170,5 +170,6 @@ class Ensemble(ModelBase):
         else:
             raise ValueError(f"Unknown strategy: {strategy}")
 
-
-
+    def get_member_parameters(self):
+        """Return member indices as 'parameter samples' for meta-QUEST."""
+        return np.arange(len(self.members)).reshape(-1, 1)

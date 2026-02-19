@@ -79,3 +79,7 @@ class MDN(ModelBase):
             mu = out[:, K:2*K].numpy()
             sigma2 = torch.exp(2*out[:, 2*K:3*K]).clamp_min(1e-12).numpy()
         return pi, mu, sigma2
+    
+    def get_member_parameters(self):
+        """Return member indices as 'parameter samples' for meta-QUEST."""
+        return np.arange(len(self.members)).reshape(-1, 1)

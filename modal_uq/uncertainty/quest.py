@@ -1,7 +1,7 @@
-
 import numpy as np
 from .base import UncertaintyBase
 from ..registry import register
+from scipy.stats import gaussian_kde
 
 @register('uncertainty','quest')
 class QUESTUncertainty(UncertaintyBase):
@@ -173,12 +173,62 @@ class QUESTUncertainty(UncertaintyBase):
         
         # Return depending on decomposition
         if self.decomposition == 'epistemic':
-            raise NotImplementedError(
-                "Epistemic decomposition for QUEST is not yet implemented. "
-                "HDR-based measures do not naturally decompose via simple difference. "
-                "Epistemic uncertainty would require domain-specific analysis of threshold/structure differences."
-            )
+            # Compute meta-QUEST on the parameter posterior as epistemic uncertainty.
+            # meta_quest operates on parameter samples (KDE-imputed posterior) and
+            # returns a scalar. We return this scalar repeated for each input in X
+            # so the shape matches other uncertainty measures ([N], one value per X).
+            n_samples = self.n_param_samples
+            quest_scores = []
+            for x in X:
+                param_samples = model.sample_full_network_parameters(n_samples)
+                mdn_param_samples = []
+                for param_sample in param_samples:
+                    mdn_params = model.mdn_params_for_input_full(x, param_sample)
+                    mdn_param_samples.append(mdn_params.flatten())
+                mdn_param_samples = np.array(mdn_param_samples)
+                quest_val = self.meta_quest_from_parameter_samples(mdn_param_samples, model=model)
+                quest_scores.append(quest_val)
+            return np.array(quest_scores)
+            
         elif self.decomposition == 'aleatoric':
             return aleatoric
         else:  # total
             return total
+
+    def meta_quest_from_parameter_samples(self, theta_samples, model=None, n_alpha=100):
+        """
+        Compute meta-QUEST as the area under the curve of QUEST(alpha) for alpha in (0,1).
+        """
+        theta = np.asarray(theta_samples)
+        if theta.ndim != 2:
+            raise ValueError("theta_samples must be shape [S, P]")
+        if model is None:
+            raise ValueError("model must be provided for analytic density evaluation.")
+        log_density = model.mdn_parameter_log_density(theta)
+        density = np.exp(log_density)
+        idx = np.argsort(-density)
+        density_sorted = density[idx]
+        dv = np.ones_like(density_sorted) / len(density_sorted)
+        quest_curve = []
+        alpha_grid = np.linspace(0, 1, n_alpha)
+        for alpha in alpha_grid:
+            target = 1.0 - alpha
+            idx_thresh = np.argmin(np.cumsum(density_sorted * dv) < target)
+            threshold = density_sorted[idx_thresh]
+            mask = density >= threshold
+            lebesgue_measure = np.sum(mask * dv)
+            quest_curve.append(lebesgue_measure)
+        meta = np.trapz(quest_curve, alpha_grid)
+        return float(np.maximum(meta, 0.0))
+
+    def meta_quest(self, model=None, theta_samples=None, n_param_samples=None):
+        """
+        Compute meta-QUEST using parameter samples.
+        """
+        if theta_samples is None:
+            if model is None:
+                raise ValueError("Provide either `model` or `theta_samples`.")
+            n = n_param_samples or self.n_param_samples
+            # For input-dependent, call from score for each input
+            raise NotImplementedError("Call meta_quest_from_parameter_samples for each input in score.")
+        return self.meta_quest_from_parameter_samples(theta_samples, model)
