@@ -155,6 +155,52 @@ class SyntheticMultiModalDataset:
         else:
             print("Plotting only supported for 1D or 2D X.")
 
+    def test_sigma_fn(X, mode_locs, k):
+            if mode_locs.shape[1] == 2:
+                # if 2 dimensional (1 feature)
+                # a = np.abs(1/-2-np.sum(X**2,axis=1))
+                # b = np.sum(X**2,axis=1)
+                # b = np.zeros_like(c)
+                c = abs(X[:,1])**2*0.1
+                # c = np.ones(X.shape[0]) * 0.5
+                # c = np.zeros(X.shape[0]) * 0.5
+                a = c
+                b = np.zeros_like(c)
+                sigmas = np.stack([np.stack([a,b],axis=1),np.stack([b,c],axis=1)],axis=2)
+
+            elif mode_locs.shape[1] == 1:
+                # If 1 dimensional
+                sigmas = np.expand_dims(np.expand_dims(np.abs(1/-2-np.sum(X**3,axis=1)),axis=1),axis=2)
+
+            if mode_locs.shape[0] == 2:
+                    # If 2 modes, repeat
+                    sigmas = np.stack([sigmas, sigmas], axis=1)
+
+            # print(sigmas.shape)
+            return sigmas
+
+    def test_mu_fn(X, mode_locs, k):
+        # For 1 feature, 1 response only, 2 modes
+        # print(mode_locs.shape)
+        out = np.zeros([X.shape[0], mode_locs.shape[0], mode_locs.shape[1]])
+        # Define y as a function of x
+        # print(out.shape)
+        out = np.stack([np.stack([X[:,0], -X[:,0]**2 + 25],axis=1), np.stack([X[:,0], X[:,0]**2 - 25],axis=1)], axis=1)
+        
+        # print(out.shape)
+        # + 2 * np.ones(mode_locs.shape[0]) * i for i in range(len(k))
+        return out
+
+    def test_pi_fn(X):
+        out = np.ones((X.shape[0], args.n_modes)) * [0.7,0.3]
+        # print(out)
+        return out
+
+    def test_no_fn(X):
+        return np.zeros(X.shape[0])
+
+
+
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description="Generate synthetic multi-modal regression data.")
@@ -183,49 +229,7 @@ if __name__ == "__main__":
 
     # Note these functions are of the joint distribution now, i.e. X, y
 
-    def sigma_fn(X, mode_locs, k):
-        if mode_locs.shape[1] == 2:
-            # if 2 dimensional (1 feature)
-            # a = np.abs(1/-2-np.sum(X**2,axis=1))
-            # b = np.sum(X**2,axis=1)
-            # b = np.zeros_like(c)
-            c = abs(X[:,1])**2*0.1
-            # c = np.ones(X.shape[0]) * 0.5
-            # c = np.zeros(X.shape[0]) * 0.5
-            a = c
-            b = np.zeros_like(c)
-            sigmas = np.stack([np.stack([a,b],axis=1),np.stack([b,c],axis=1)],axis=2)
-
-        elif mode_locs.shape[1] == 1:
-            # If 1 dimensional
-            sigmas = np.expand_dims(np.expand_dims(np.abs(1/-2-np.sum(X**3,axis=1)),axis=1),axis=2)
-
-        if mode_locs.shape[0] == 2:
-                # If 2 modes, repeat
-                sigmas = np.stack([sigmas, sigmas], axis=1)
-
-        # print(sigmas.shape)
-        return sigmas
-
-    def mu_fn(X, mode_locs, k):
-        # For 1 feature, 1 response only, 2 modes
-        # print(mode_locs.shape)
-        out = np.zeros([X.shape[0], mode_locs.shape[0], mode_locs.shape[1]])
-        # Define y as a function of x
-        # print(out.shape)
-        out = np.stack([np.stack([X[:,0], -X[:,0]**2 + 25],axis=1), np.stack([X[:,0], X[:,0]**2 - 25],axis=1)], axis=1)
-        
-        # print(out.shape)
-        # + 2 * np.ones(mode_locs.shape[0]) * i for i in range(len(k))
-        return out
-
-    def pi_fn(X):
-        out = np.ones((X.shape[0], args.n_modes)) * [0.7,0.3]
-        # print(out)
-        return out
-
-    def no_fn(X):
-        return np.zeros(X.shape[0])
+    
 
     dataset = SyntheticMultiModalDataset(
         n_samples=args.n_samples,
@@ -237,7 +241,7 @@ if __name__ == "__main__":
         component_df=args.component_df,
         seed_master=args.seed_master
     )
-    X, y, global_mode, mode_ids = dataset.get_data(pi_fn=pi_fn, mu_fn=mu_fn, sigma_fn=sigma_fn, noise_fn=no_fn)
+    X, y, global_mode, mode_ids = dataset.get_data(pi_fn=dataset.test_pi_fn, mu_fn=dataset.test_mu_fn, sigma_fn=dataset.test_sigma_fn, noise_fn=dataset.test_no_fn)
     df = dataset.to_dataframe(X, y)
     if args.output_csv:
         df.to_csv(args.output_csv, index=False)

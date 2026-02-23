@@ -7,6 +7,7 @@ from ..experiments.ood import OODExperiment
 from ..experiments.active_learning import ActiveLearning
 
 from ..datasets.faithful import Faithful
+from ..datasets.synthetic import SyntheticMultiModalDataset
 
 from ..pgt.conditional_kde import ConditionalKDE
 
@@ -14,6 +15,7 @@ from ..models.mdn_mc_dropout import MDN_MCDropout
 from ..models.mdn import MDN
 from ..models.ensemble import Ensemble
 from ..models.bnn_vi import BayesianNNVI
+from ..models.gp import GaussianProcessModel
 
 from ..uncertainty.variance import PredictiveVariance
 from ..uncertainty.differential_entropy import DifferentialEntropy

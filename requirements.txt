@@ -8,6 +8,10 @@ seaborn>=0.12
 # Optional NN deps
 torch>=2.1
 
+# MDN for data vis only
+scikit-mdn
+
+
 # dev
 tqdm>=4.65
 pytest>=7.4
