@@ -20,6 +20,7 @@ class DifferentialEntropy(UncertaintyBase):
     to return [S,N,G] densities. Falls back to deterministic density if unavailable.
     """
     def __init__(self, base=np.e, decomposition='total', grid_points=512, y_pad=1.0, n_param_samples=20):
+    # def __init__(self, base=np.e, decomposition='total', grid_points=10000, y_pad=1.0, n_param_samples=20):
         assert decomposition in {'total','aleatoric','epistemic'}
         self.base = base
         self.decomposition = decomposition
@@ -32,7 +33,7 @@ class DifferentialEntropy(UncertaintyBase):
         """
         Normalize densities along the last axis (G), regardless of arr being [N,G] or [S,N,G].
         """
-        Z = np.trapz(arr, y_grid, axis=-1)     # shape: [N] or [S,N]
+        Z = np.trapz(arr, y_grid, axis=-1)
         Z = np.expand_dims(Z, axis=-1)         # -> [N,1] or [S,N,1]
         return arr / (Z + 1e-12)
 
@@ -44,6 +45,12 @@ class DifferentialEntropy(UncertaintyBase):
         Implements the limit p*log(p)=0 when p=0.
         """
         # Normalize
+
+        print("Test prints - differential_entropy.py - _entropy_from_density()")
+        print(dens.shape, y_grid.shape)
+        print(dens[:5,:5], y_grid[:5])
+        # quit()
+
         dens = DifferentialEntropy._normalize_last_axis(dens, y_grid)
 
         # Safe log: substitute only inside the log, not in dens
@@ -112,11 +119,21 @@ class DifferentialEntropy(UncertaintyBase):
         # Build a default grid per model (shared across X in this batch)
         y_grid = model.default_y_grid(X, grid_points=self.grid_points, y_pad=self.y_pad)
 
+        # print("Test prints - differential_entropy.py - score")
+        # print(X.shape, y_grid.shape)
+        # print(X[:5], y_grid[:5])
+
         try:
             # Sample from both prediction and approximation contexts
             dens_pred = model.predict_density_samples(X, y_grid, context='predict', n_samples=self.n_param_samples)  # [S,N,G]
             dens_approx = model.predict_density_samples(X, y_grid, context='approximate', n_samples=self.n_param_samples)  # [S,N,G]
             
+            print("differential_entropy.py - score() - test prints")
+            print(model.__class__.__name__)
+            print(dens_pred.shape, dens_approx.shape, y_grid.shape)
+            print(dens_pred[:1, :5, :5], dens_approx[:1, :5, :5])
+            # print(np.sum(dens_pred[:1,:1,:,])) # 3.097?
+
             if dens_pred.ndim != 3 or dens_approx.ndim != 3:
                 raise ValueError("predict_density_samples must return [S,N,G]")
 
@@ -130,8 +147,16 @@ class DifferentialEntropy(UncertaintyBase):
             
             # Total entropy from predict context
             dens_pred_mix = dens_pred.mean(axis=0)  # [N,G]
+            # print(dens_pred_mix.shape)
+            # print(np.sum(dens_pred_mix[:1,:])) #3.097
+
             dens_pred_mix = self._normalize_last_axis(dens_pred_mix, y_grid)
+            # print(dens_pred_mix.shape)
+            # print(dens_pred_mix[:5,:5])
+
             total = self._entropy_from_density(dens_pred_mix, y_grid, self.base)  # [N]
+            # print(total.shape)
+            # print(total[:5])
 
         except Exception:
             # Deterministic density fallback: [N,G]

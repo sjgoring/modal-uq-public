@@ -11,7 +11,9 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 from typing import Optional, Sequence, Tuple, Union, Callable, Dict
+from ..registry import register
 
+@register('dataset','synthetic_conditional')
 class SyntheticMultiModalConditionalDataset:
     def get_feature_grid(self, X, x_values=None):
         """
@@ -211,6 +213,8 @@ class SyntheticMultiModalConditionalDataset:
             self.mode_locs = np.array(mode_locs)
         else:
             self.mode_locs = np.random.default_rng(self.seed_master).normal(loc=0, scale=5, size=(n_modes, n_features))
+        # Ground truth handling for experiments
+        self.needs_pseudo_ground_truth = False
 
     def sample_x(self) -> np.ndarray:
         if isinstance(self.x_sampler, str):
@@ -290,6 +294,18 @@ class SyntheticMultiModalConditionalDataset:
                 y[i] += self.rng_noise.normal(loc=0, scale=noise_fn(X[i:i+1])[0])
         global_mode = self.mode_locs[np.argmax(np.mean(pi, axis=0))]
         return X, y, global_mode, mode_ids
+
+    def gt(self, X, mu_fn, pi_fn, sigma_fn):
+        """
+        Returns the ground truth conditional modes of y|x for samples X.
+        """
+        pi = pi_fn(x.reshape(1,-1), self.n_modes) if hasattr(self, 'pi_fn') else np.ones((1, self.n_modes)) / self.n_modes
+        mu = mu_fn(x.reshape(1,-1), self.mode_locs, np.arange(self.n_modes)) if hasattr(self, 'mu_fn') else np.tile(self.mode_locs[:, 0], (1, 1))
+        sigma = sigma_fn(x.reshape(1,-1), self.mode_locs, np.arange(self.n_modes)) if hasattr(self, 'sigma_fn') else np.tile(self.mode_scales, (1, 1))
+        # For simplicity, we take the mode as the mean of the component with highest weight at x
+        mode_idx = np.argmax(pi)
+        return mu[0, mode_idx] if mu.ndim == 3 else mu[0, mode_idx]
+
 
     def to_dataframe(self, X: np.ndarray, y: np.ndarray) -> pd.DataFrame:
         df = pd.DataFrame(X, columns=[f"x{i+1}" for i in range(self.n_features)])

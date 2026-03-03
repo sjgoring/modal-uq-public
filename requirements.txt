@@ -1,17 +1,16 @@
+# requirements.txt for Python 3.7.9 compatibility
 
-numpy>=1.24
-scipy>=1.10
-pandas>=2.0
-scikit-learn>=1.3
-matplotlib>=3.7
-seaborn>=0.12
-# Optional NN deps
-torch>=2.1
-
-# MDN for data vis only
+numpy<1.24
+scipy<1.10
+pandas<2.0
+scikit-learn<1.3
+matplotlib<3.7
+seaborn<0.12
+torch<2.0
 scikit-mdn
-
-
-# dev
+tensorflow<2.11
+tensorflow-probability==0.11
+tensorBNN
+torchmetrics
 tqdm>=4.65
-pytest>=7.4
+pytest<7.0

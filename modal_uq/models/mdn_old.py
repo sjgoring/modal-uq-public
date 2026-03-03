@@ -3,7 +3,7 @@ import numpy as np
 from .base import ModelBase
 from ..registry import register
 
-@register('model','mdn')
+# @register('model','mdn')
 class MDN(ModelBase):
     def __init__(self, input_dim=None, hidden_sizes=(64,64), num_components=5, lr=1e-3, epochs=200, batch_size=128, marginalization=None):
         super().__init__(marginalization=marginalization)

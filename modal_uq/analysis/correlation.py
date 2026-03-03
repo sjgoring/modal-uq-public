@@ -21,6 +21,10 @@ def compute_uncertainty_scores(measure_specs, model, X, y=None):
         u = build('uncertainty', spec['name'], **params)
 
         # 4) Compute the score
+        # print("Test prints - correlation.py - compute_uncertainty_scores")
+        # print(X.shape, y.shape if y is not None else None)
+        # print(X[:5], y[:5] if y is not None else None)
+        # 23:10 02/03 - appears ok.
         s = u.score(model, X, y)
 
         # 5) Name the column: label (if provided) else measure name

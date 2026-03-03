@@ -1,0 +1,65 @@
+{
+  "experiment": {
+    "type": "selective",
+    "seed": 42,
+    "output_dir": "runs/selective_synth_cond",
+    "needs_psuedo_ground_truth": false
+  },
+  "dataset": {
+    "name": "synthetic_conditional",
+    "params":{
+      "n_samples": 50000,
+      "n_modes": 2,
+      "n_features": 1,
+      "seed_master": 42
+      }
+    } 
+  ,
+  "pseudo_ground_truth": {
+    "name": "conditional_kde",
+    "params": {
+      "bandwidth": 0.5
+    }
+  }
+  ,
+  "model": {
+    "name": "mdn",
+  "params": {
+      "n_gaussians": 2,
+      "weight_decay": 1e-2,
+      "epochs": 1000
+  },
+    "marginalization": {
+      "predict": "bma_expected",         
+      "approximate": "point_estimate",   
+      "point_estimate_criterion": "mle" 
+      }
+  },
+  "uncertainty": {
+  "measures": [
+    { "name": "differential_entropy", "params": { "decomposition": "total",     "label": "differential_entropy_total" } },
+    { "name": "differential_entropy", "params": { "decomposition": "aleatoric",     "label": "differential_aleatoric_total" } },
+    { "name": "quest", "params": { "decomposition": "total",     "label": "quest_total_32%" , "alpha":0.32} },
+    { "name": "quest", "params": { "decomposition": "aleatoric",     "label": "quest_aleatoric_32%" , "alpha":0.32} },
+    { "name": "variance", "params": { "decomposition": "total",     "label": "variance_total" } },
+    { "name": "variance", "params": { "decomposition": "aleatoric",     "label": "variance_aleatoric" } }
+  ]
+},
+  "correlation": {
+    "enabled": true,
+    "method": [
+      "pearson",
+      "spearman"
+    ],
+    "output_dir": "runs/_correlation"
+  },
+  "metrics": {
+    "primary": [
+      "moae"    
+    ],
+    "distributional": [
+      "nll",
+      "crps"
+    ]
+  }
+}

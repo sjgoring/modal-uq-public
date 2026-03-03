@@ -20,6 +20,7 @@ class QUESTUncertainty(UncertaintyBase):
     and is left as a stub for future implementation.
     """
     def __init__(self, alpha, decomposition='total', grid_points=512, y_pad=1.0, n_param_samples=20):
+    # def __init__(self, alpha, decomposition='total', grid_points=10000, y_pad=1.0, n_param_samples=20):
         assert decomposition in {'total','aleatoric','epistemic'}
         self.alpha = alpha
         self.decomposition = decomposition
@@ -150,6 +151,10 @@ class QUESTUncertainty(UncertaintyBase):
             threshold_pred, mask_pred = self._hdr_from_density(dens_pred, y_grid, self.alpha)
             threshold_approx, mask_approx = self._hdr_from_density(dens_approx, y_grid, self.alpha)
             
+            print("quest.py - score() - test prints")
+            print(dens_pred.shape, mask_pred.shape)
+            print(dens_pred[:1,:5,:5], mask_pred[:1,:5,:5])
+
             # Compute Lebesgue measures
             lebesgue_pred = self._lebesgue_measure_hdr(mask_pred, y_grid)   # [N]
             lebesgue_approx = self._lebesgue_measure_hdr(mask_approx, y_grid)  # [N]

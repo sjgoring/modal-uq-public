@@ -12,3 +12,5 @@ class Faithful(DatasetSpec):
         self.X_train, self.y_train, self.X_val, self.y_val, self.X_test, self.y_test = self._apply_split(X, y, split)
         if standardize:
             self._standardize_inplace()
+        # Ground truth handling for experiments
+        self.needs_pseudo_ground_truth = True

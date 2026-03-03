@@ -7,15 +7,15 @@ from ..experiments.ood import OODExperiment
 from ..experiments.active_learning import ActiveLearning
 
 from ..datasets.faithful import Faithful
-from ..datasets.synthetic import SyntheticMultiModalDataset
+# from ..datasets.synthetic import SyntheticMultiModalDataset
+from ..datasets.synthetic_conditional import SyntheticMultiModalConditionalDataset
 
 from ..pgt.conditional_kde import ConditionalKDE
 
-from ..models.mdn_mc_dropout import MDN_MCDropout
-from ..models.mdn import MDN
-from ..models.ensemble import Ensemble
+from ..models.mdn import MixtureDensityModel
+# from ..models.ensemble import Ensemble
 from ..models.bnn_vi import BayesianNNVI
-from ..models.gp import GaussianProcessModel
+# from ..models.gp import GaussianProcessModel
 
 from ..uncertainty.variance import PredictiveVariance
 from ..uncertainty.differential_entropy import DifferentialEntropy
@@ -37,8 +37,12 @@ def run_from_config(config_path: str):
     # ---- Dataset ----
     ds_cfg = cfg['dataset']
     ds_name, ds_params = _split_name(ds_cfg, 'name')
-    ds = build('dataset', ds_name, **ds_params)
-
+    # For use with sythentic conditional data set only. Todo: Implement a more general mechanism for this.
+    if ds_cfg.get('parameters', not None):
+        ds = build('dataset', ds_name, **ds_cfg.get('params', {}))
+    else:
+        ds = build('dataset', ds_name, **ds_params)
+    
     # ---- Pseudo Ground Truth ----
     pgt_cfg = cfg['pseudo_ground_truth']
     pgt = build('pgt', pgt_cfg['name'], **pgt_cfg.get('params', {}))

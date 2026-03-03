@@ -3,7 +3,7 @@ import numpy as np
 from .base import ModelBase, MarginalizationConfig
 from ..registry import register
 
-@register('model','mdn_mc_dropout')
+# @register('model','mdn_mc_dropout')
 class MDN_MCDropout(ModelBase):
     def __init__(self, input_dim=None, hidden_sizes=(64,64), dropout_p=0.1,
                  num_components=5, lr=1e-3, epochs=200, batch_size=128, marginalization=None):

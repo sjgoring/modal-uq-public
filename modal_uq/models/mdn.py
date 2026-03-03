@@ -2,7 +2,9 @@ import numpy as np
 from skmdn import MixtureDensityEstimator
 
 from .base import ModelBase
+from ..registry import register
 
+@register('model','mdn')
 class MixtureDensityModel(ModelBase):
     """Mixture Density network model wrapper.
         kwargs are passed to the underlying MixtureDensityEstimator from scikit-mdn.
@@ -26,8 +28,11 @@ class MixtureDensityModel(ModelBase):
         # dens = np.exp(-0.5 * ((y_grid[None, :] - mu[:, None]) ** 2) / (std[:, None] ** 2))
         # dens /= (np.sqrt(2 * np.pi) * std[:, None])
         # return dens
-        out = self.mdn.pdf(X, resolution=100)[0]
-        print(out)
+        y_min = min(y_grid)
+        y_max = max(y_grid)
+        res = y_grid.shape[0]
+        out = self.mdn.pdf(X, resolution=res, y_min=y_min, y_max=y_max)[0]
+        # print(out)
         return out
         # The above works on the assumption the y_grid is the same as the one used in the MDN fit. If we want to allow arbitrary y_grids, we may need to compute the density manually from the predicted mixture parameters.
 

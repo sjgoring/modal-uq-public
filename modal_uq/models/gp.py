@@ -9,7 +9,7 @@ class GaussianProcessModel(ModelBase):
         super().__init__(marginalization)
         if kernel is None:
             kernel = C(1.0, (1e-4, 1e6)) * RBF(1.0, (1e-6, 1e3))
-        self.gp = GaussianProcessRegressor(kernel=kernel, n_restarts_optimizer=10)
+        self.gp = GaussianProcessRegressor(kernel=kernel, n_restarts_optimizer=5)
         self._y_min = None
         self._y_max = None
 
