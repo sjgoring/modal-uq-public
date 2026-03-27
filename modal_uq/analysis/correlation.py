@@ -67,8 +67,11 @@ def _distance_corr(x, y):
 
 
 def save_correlation_artifacts(df_scores, corrs, out_dir):
-    import os
+    import os, datetime
+    ts = datetime.datetime.now().strftime("%Y%m%d_%H%M")
+    out_dir = os.path.join(out_dir, ts)
     os.makedirs(out_dir, exist_ok=True)
+    
     df_scores.to_csv(os.path.join(out_dir, 'uncertainty_scores.csv'), index=False)
     for name, mat in corrs.items():
         mat.to_csv(os.path.join(out_dir, f'corr_{name}.csv'))

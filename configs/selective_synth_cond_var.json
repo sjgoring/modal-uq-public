@@ -2,16 +2,13 @@
   "experiment": {
     "type": "selective",
     "seed": 42,
-    "output_dir": "runs/selective_synth_cond",
+    "output_dir": "runs/selective_synth_cond_var",
     "needs_psuedo_ground_truth": false
   },
   "dataset": {
-    "name": "synthetic_conditional",
+    "name": "synthetic_constant_var",
     "params":{
-      "n_samples": 50000,
-      "n_modes": 2,
-      "n_features": 1,
-      "seed_master": 42
+      
       }
     } 
   ,
@@ -25,9 +22,11 @@
   "model": {
     "name": "mdn",
   "params": {
-      "n_gaussians": 2,
-      "weight_decay": 1e-2,
-      "epochs": 1000
+    "hidden_dim" : 50,
+          "n_gaussians" : 2,
+    "epochs" : 10000,
+    "lr" : 1e-5,
+    "weight_decay" : 1e-4
   },
     "marginalization": {
       "predict": "bma_expected",         
@@ -38,11 +37,11 @@
   "uncertainty": {
   "measures": [
     { "name": "differential_entropy", "params": { "decomposition": "total",     "label": "differential_entropy_total" } },
-    { "name": "differential_entropy", "params": { "decomposition": "aleatoric",     "label": "differential_aleatoric_total" } },
-    { "name": "quest", "params": { "decomposition": "total",     "label": "quest_total_32%" , "alpha":0.32} },
-    { "name": "quest", "params": { "decomposition": "aleatoric",     "label": "quest_aleatoric_32%" , "alpha":0.32} },
     { "name": "variance", "params": { "decomposition": "total",     "label": "variance_total" } },
-    { "name": "variance", "params": { "decomposition": "aleatoric",     "label": "variance_aleatoric" } }
+    { "name": "quest", "params": { "decomposition": "total",     "label": "quest_total_1%" , "alpha":0.01} },
+    { "name": "quest", "params": { "decomposition": "total",     "label": "quest_total_5%" , "alpha":0.05} },
+    { "name": "quest", "params": { "decomposition": "total",     "label": "quest_total_10%" , "alpha":0.10} },
+    { "name": "quest", "params": { "decomposition": "total",     "label": "quest_total_32%" , "alpha":0.32} }
   ]
 },
   "correlation": {
@@ -51,7 +50,7 @@
       "pearson",
       "spearman"
     ],
-    "output_dir": "runs/_correlation/26-03-24-s"
+    "output_dir": "runs/_correlation"
   },
   "metrics": {
     "primary": [

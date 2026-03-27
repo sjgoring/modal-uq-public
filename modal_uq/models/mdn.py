@@ -16,6 +16,10 @@ class MixtureDensityModel(ModelBase):
         self._y_max = None
 
     def fit(self, X, y, X_val=None, y_val=None):
+        # Expanding y dim if required.
+        if y.ndim == 1:
+            y = np.expand_dims(y, axis=1)
+
         self.mdn.fit(X, y)
         self._y_min = np.min(y)
         self._y_max = np.max(y)

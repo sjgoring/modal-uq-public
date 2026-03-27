@@ -8,9 +8,12 @@ from ..metrics import mode_errors
 from ..utils import io as io_utils
 import matplotlib.pyplot as plt
 from sklearn.model_selection import train_test_split
+from ..datasets.synthetic_constant_var import SyntheticConstantVarDataset
+import datetime
 
 class SelectivePrediction(ExperimentBase):
     def run(self):
+        print("Running Selective Prediction experiment...")
         # GT is available from experimental setup, so want to override this here.
         # In fact, this should probably be a feature of experiment base.
         if self.ds.needs_pseudo_ground_truth:
@@ -23,18 +26,34 @@ class SelectivePrediction(ExperimentBase):
             y_mode_pred = self.model.predict_mode(self.ds.X_test, y_grid)
             self.X_test, self.y_test = self.ds.X_test, self.ds.y_test
         else:
-            # For experiment: Selective_Synthetic only. Todo: General re-write.
-            X, y, _, _ = self.ds.get_data(pi_fn=self.ds.test_pi_fn, mu_fn=self.ds.test_mu_fn, sigma_fn=self.ds.test_sigma_fn, noise_fn=self.ds.test_no_fn)
-            self.X_train, self.X_test, self.y_train, self.y_test = train_test_split(X, y, test_size=0.2, random_state = 42)
+            
+            if type(self.ds) is SyntheticConstantVarDataset:
+                # No mu, pi, sigma fns.
+                X, y, _, _, _ = self.ds.get_data()
+                self.X_train, self.y_train = X, y # bodge for initial results.
+                self.X_test, self.y_test = X, y
+
+            else:
+                # For experiment: Selective_Synthetic only. Todo: General re-write.
+                X, y, _, _ = self.ds.get_data(pi_fn=self.ds.test_pi_fn, mu_fn=self.ds.test_mu_fn, sigma_fn=self.ds.test_sigma_fn, noise_fn=self.ds.test_no_fn)
+                self.X_train, self.X_test, self.y_train, self.y_test = train_test_split(X, y, test_size=0.2, random_state = 42)
+            
             self.y_train = np.expand_dims(self.y_train, axis=1) # Bodge to fix training for MDN. Todo: replace.
             self.model.fit(self.X_train, self.y_train)
-            y_mode_true = self.ds.gt(self.X_test, self.ds.test_mu_fn, self.ds.test_pi_fn, self.ds.test_sigma_fn)
             y_grid = self.model.default_y_grid(self.X_test)
             y_mode_pred = self.model.predict_mode(self.X_test, y_grid)
-        
+
+            if type(self.ds) is SyntheticConstantVarDataset:
+                y_mode_true = self.ds.gt(self.X_test)
+            else:
+                y_mode_true = self.ds.gt(self.X_test, self.ds.test_mu_fn, self.ds.test_pi_fn, self.ds.test_sigma_fn)
+
+
+            
         self.results = {'y_mode_true': y_mode_true, 'y_mode_pred': y_mode_pred}
         
         unc_cfg = self.cfg.get('uncertainty')
+        print("Uncertainty config:", unc_cfg)
         if unc_cfg:
             # print("Computing uncertainty scores for selective analysis...")
             # print(self.X_test.shape, self.y_test.shape)
@@ -46,10 +65,16 @@ class SelectivePrediction(ExperimentBase):
                 out_dir = corr_cfg.get('output_dir', 'runs/_correlation')
                 save_correlation_artifacts(df_scores, corrs, out_dir)
             # Run selective analysis and save AUROC-style (risk vs % abstention) plots
+            print("Running selective analysis...")
             try:
-                self.run_selective_analysis(df_scores)
+                ts = datetime.datetime.now().strftime("%Y%m%d_%H%M")
+                print(ts)
+                out_dir = os.path.join('runs', f"_selective\{ts}")
+                print(out_dir)
+                self.run_selective_analysis(df_scores, out_dir=out_dir)
             except Exception:
                 # Do not fail experiment run if selective analysis errors; keep original behavior
+                print(Exception)
                 pass
 
     def _get_risk_fn(self, metric_name):

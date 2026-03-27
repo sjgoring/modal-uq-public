@@ -131,7 +131,13 @@ class DifferentialEntropy(UncertaintyBase):
             print("differential_entropy.py - score() - test prints")
             print(model.__class__.__name__)
             print(dens_pred.shape, dens_approx.shape, y_grid.shape)
-            print(dens_pred[:1, :5, :5], dens_approx[:1, :5, :5])
+            print("predicted densities sample 1:", dens_pred[:1, :5, :5])
+            print("predicted densities sum check (should be ~1):", np.sum(dens_pred[:1,:1,:]))
+            print("where dens_pred > 0:", np.sum(dens_pred[:1,:1,:] > 0))
+            print("approx densities sample 1:", dens_approx[:1, :5, :5])
+            # print(dens_pred[:1, :5, :5], dens_approx[:1, :5, :5])
+            # quit()
+
             # print(np.sum(dens_pred[:1,:1,:,])) # 3.097?
 
             if dens_pred.ndim != 3 or dens_approx.ndim != 3:

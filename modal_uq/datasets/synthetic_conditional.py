@@ -11,9 +11,9 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 from typing import Optional, Sequence, Tuple, Union, Callable, Dict
-from ..registry import register
+# from ..registry import register
 
-@register('dataset','synthetic_conditional')
+# @register('dataset','synthetic_conditional')
 class SyntheticMultiModalConditionalDataset:
     def get_feature_grid(self, X, x_values=None):
         """
@@ -121,9 +121,7 @@ class SyntheticMultiModalConditionalDataset:
                 mu = mu_all[ix]
                 sigma = sigma_all[ix]
                 pi = pi_all[ix]
-                # Plot predictive density if provided
-                if predictive_density is not None:
-                    l_pred_density.set_data(y_grid, predictive_density[ix])
+                # defer plotting predictive density until after normalization below
             else:
                 x1_sel = slider1.val
                 x2_sel = slider2.val
@@ -141,15 +139,73 @@ class SyntheticMultiModalConditionalDataset:
                 # Plot predictive density if provided
                 if predictive_density is not None:
                     l_pred_density.set_data(y_grid, predictive_density[idx])
-            dens = mixture_density(y_grid, mu, sigma, pi)
-            l_density.set_data(y_grid, dens)
+            # compute normalized component gaussians, then weight them by pi
+            comp_list = []
             for k in range(self.n_modes):
-                comp_dens = pi[k] * (1/(np.sqrt(2*np.pi)*sigma[k])) * np.exp(-0.5*((y_grid-mu[k])/sigma[k])**2)
+                base = (1.0 / (np.sqrt(2.0 * np.pi) * sigma[k])) * np.exp(-0.5 * ((y_grid - mu[k]) / sigma[k]) ** 2)
+                try:
+                    base_int = float(np.trapz(base, y_grid))
+                except Exception:
+                    base_int = 0.0
+                if base_int > 0:
+                    base = base / base_int
+                comp_dens = float(pi[k]) * base
+                comp_list.append(comp_dens)
+                # update component line and label to show weight
                 l_comp[k].set_data(y_grid, comp_dens)
+                l_comp[k].set_label(f'Comp {k+1} (pi={pi[k]:.2f})')
+
+            # mixture is the sum of weighted components
+            try:
+                dens = np.sum(np.vstack(comp_list), axis=0)
+            except Exception:
+                dens = mixture_density(y_grid, mu, sigma, pi)
+
+            l_density.set_data(y_grid, dens)
+
+            # normalize and plot predictive density if provided
+            if predictive_density is not None:
+                try:
+                    if n_features == 1:
+                        pred = np.asarray(predictive_density[ix])
+                    else:
+                        pred = np.asarray(predictive_density[idx])
+                    pred_int = float(np.trapz(pred, y_grid))
+                except Exception:
+                    pred_int = 0.0
+                    pred = None
+                if pred is not None and pred_int > 0:
+                    pred = pred / pred_int
+                    l_pred_density.set_data(y_grid, pred)
+
+            # refresh legend to show updated component labels with weights
+            try:
+                ax.legend()
+            except Exception:
+                pass
             y_at_x = get_data_y_at_x(x_sel, tol=1e-8)
             l_sampled_y.set_offsets(np.c_[y_at_x, np.zeros_like(y_at_x)])
             ax.set_xlim(y_min, y_max)
-            ax.set_ylim(0, np.max(dens)*1.1)
+            # choose y-axis upper limit to include peaks from mixture, components, and predictive density
+            y_max_candidates = []
+            try:
+                y_max_candidates.append(float(np.max(dens)))
+            except Exception:
+                pass
+            for cd in comp_list:
+                try:
+                    y_max_candidates.append(float(np.max(cd)))
+                except Exception:
+                    pass
+            if predictive_density is not None and 'pred' in locals() and pred is not None:
+                try:
+                    y_max_candidates.append(float(np.max(pred)))
+                except Exception:
+                    pass
+            y_top = max(y_max_candidates) if y_max_candidates else 1.0
+            if y_top <= 0:
+                y_top = 1.0
+            ax.set_ylim(0.0, float(y_top * 1.1))
             fig.canvas.draw_idle()
         update()
         if n_features == 1:
@@ -423,7 +479,7 @@ class SyntheticMultiModalConditionalDataset:
     # Example functions for conditional mixture
     def test_sigma_fn(self, X, mode_locs, k):
         # Example: constant sigma for all modes
-        # return np.ones((X.shape[0], len(k))) * 0.5
+        return np.ones((X.shape[0], len(k))) * 2
 
         # Example: 0 sigma for all modes
         # return np.zeros((X.shape[0], len(k))) * 0.5
@@ -434,10 +490,20 @@ class SyntheticMultiModalConditionalDataset:
         # out[:, 1] = abs(np.sin(X[:,0]*np.pi+np.pi)) * 5
 
 
-        out[:, 0] = (abs((X[:,0]-10)*(X[:,0])*(X[:,0]+10))) * 0.025
-        # mode k=1 sigma varies with the sin of pi x
-        out[:, 1] = abs(np.sin(X[:,0]*np.pi/5)) * 10
-        print(out[0:10,:])
+        # 03/03 - added + a to ensure non negligible sigma values across the range of x
+        a = 1
+        # out[:, 0] = (abs((X[:,0]-10)*(X[:,0])*(X[:,0]+10))) * 0.025 + a
+        # # # mode k=1 sigma varies with the sin of pi x
+        # out[:, 1] = abs(np.sin(X[:,0]*np.pi/5)) * 10 + a
+
+        # out[:, 0] = (abs((X[:,0]-5)*(X[:,0])*(X[:,0]+10))) * 0.025
+        # out[:, 1] = abs(np.sin(X[:,0]*np.pi/5)) * 10 + a
+
+
+        
+
+
+        # print(out[0:10,:])
         # out[:, 1] = 
         # print(out[0:10,:])
         # print(X[0:10,0])
@@ -463,7 +529,7 @@ class SyntheticMultiModalConditionalDataset:
 
     def test_pi_fn(self, X, n_modes):
         # Example: fixed weights
-        return np.ones((X.shape[0], n_modes)) * [0.5, 0.5]
+        return np.ones((X.shape[0], n_modes)) * [0.7, 0.3]
 
     def test_no_fn(self, X):
         return np.zeros(X.shape[0])
@@ -473,7 +539,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Generate synthetic multi-modal regression data (conditional version).")
     parser.add_argument('--n_samples', type=int, default=1000)
     parser.add_argument('--n_modes', type=int, default=2)
-    parser.add_argument('--n_features', type=int, default=2)
+    parser.add_argument('--n_features', type=int, default=1)
     parser.add_argument('--mode_locs', type=int, default=None)
     parser.add_argument('--component_type', type=str, default='gaussian', choices=['gaussian', 'student-t'])
     parser.add_argument('--component_df', type=float, default=None)
