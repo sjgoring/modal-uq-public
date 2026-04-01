@@ -29,9 +29,10 @@ class SelectivePrediction(ExperimentBase):
             
             if type(self.ds) is SyntheticConstantVarDataset:
                 # No mu, pi, sigma fns.
-                X, y, _, _, _ = self.ds.get_data()
-                self.X_train, self.y_train = X, y # bodge for initial results.
-                self.X_test, self.y_test = X, y
+                X, y, _, _, _ = self.ds.get_data() # get n_samples
+                self.X_train, self.y_train = X, y
+                self.X_test, self.y_test, _, _, _ = self.ds.get_data() # get n_samples worth again, but this time keep only 0.2 for testing. Todo: Re-write to be more efficient and less hacky.
+                _, self.X_test, _, self.y_test = train_test_split(self.X_test, self.y_test, test_size=0.2, random_state = 42)
 
             else:
                 # For experiment: Selective_Synthetic only. Todo: General re-write.
@@ -50,7 +51,7 @@ class SelectivePrediction(ExperimentBase):
 
 
             
-        self.results = {'y_mode_true': y_mode_true, 'y_mode_pred': y_mode_pred}
+        self.results = {'y_mode_true': y_mode_true, 'y_mode_pred': y_mode_pred, 'y_grid': y_grid, 'true_dens': self.ds.gt_dens(self.X_test, y_grid), 'est_dens': self.model.predict_density(self.X_test, y_grid, context='predict')}
         
         unc_cfg = self.cfg.get('uncertainty')
         print("Uncertainty config:", unc_cfg)
@@ -80,10 +81,25 @@ class SelectivePrediction(ExperimentBase):
     def _get_risk_fn(self, metric_name):
         name = (metric_name or '').lower()
         if name in ('moae', 'modal_absolute_error', 'mae'):
-            return mode_errors.modal_absolute_error
+            return mode_errors.modal_absolute_error, {}
         if name in ('mose', 'modal_squared_error', 'mse'):
-            return mode_errors.modal_squared_error
+            return mode_errors.modal_squared_error, {}
+        if name in ('lr_true', 'likelihood_ratio_true'):
+            return mode_errors.likelihood_ratio_measure, {"reference_dist": "true"}
+        if name in ('lr_est', 'likelihood_ratio_est'):
+            return mode_errors.likelihood_ratio_measure, {"reference_dist": "est"}
+        if name in ('coverage_true', 'coverage_reference_true'):
+            return mode_errors.modal_coverage_measure, {"reference_dist": "true"}
+        if name in ('coverage_est', 'coverage_reference_est'):
+            return mode_errors.modal_coverage_measure, {"reference_dist": "est"}
         raise ValueError(f"Unknown selective metric '{metric_name}'")
+
+    def _is_distance_metric(self, metric_name):
+        """Return True for distance metrics (absolute / squared errors)."""
+        if metric_name is None:
+            return False
+        name = str(metric_name).lower()
+        return name in ('moae', 'modal_absolute_error', 'mae', 'mose', 'modal_squared_error', 'mse')
 
     def compute_selective_curve(self, df_scores, measure_label, metric_name='moae', steps=100):
         print("Test: selective.py, compute_selective_curve() - test prints")
@@ -94,8 +110,13 @@ class SelectivePrediction(ExperimentBase):
         y_true = np.asarray(self.y_test)
         y_pred = np.asarray(self.results['y_mode_pred'])
         uncertainty = np.asarray(df_scores[measure_label].values)
-        risk_fn = self._get_risk_fn(metric_name)
-        coverages, risks = risk_coverage(y_true, y_pred, uncertainty, risk_fn, steps=steps)
+        risk_fn, risk_fn_kwargs = self._get_risk_fn(metric_name)
+        # print("debug-risk_fn", risk_fn)
+        # print( "debug: risk_fn_kwargs", risk_fn_kwargs)
+        y_grid = self.model.default_y_grid(self.X_test)
+        # print("Debug - print risk coverage inputs:")
+        # print("y_true", y_true[:5], "y_pred", y_pred[:5], "uncertainty", uncertainty[:5], "y_grid", y_grid[:5], "risk_fn",risk_fn,"risk_fn_kwargs", risk_fn_kwargs, "coverage_steps", s)
+        coverages, risks = risk_coverage(y_true, y_pred, uncertainty, risk_fn, risk_fn_kwargs, steps=steps, y_grid=y_grid, true_dens=self.results['true_dens'], est_dens=self.results['est_dens'])
         abstention = 100.0 * (1.0 - coverages)
         area = aurc(coverages, risks)
         return {
@@ -111,6 +132,12 @@ class SelectivePrediction(ExperimentBase):
         os.makedirs(out_dir, exist_ok=True)
         measure = curve.get('measure')
         metric = curve.get('metric')
+
+        # order abstention, risk pairs by increasing abstention for plotting
+        order = np.argsort(curve['abstention'])
+        curve['abstention'] = curve['abstention'][order]
+        curve['risk'] = curve['risk'][order]
+
         if filename is None:
             safe_measure = str(measure).replace(' ', '_')
             safe_metric = str(metric).replace(' ', '_')
@@ -118,10 +145,67 @@ class SelectivePrediction(ExperimentBase):
         path = os.path.join(out_dir, filename)
         plt.figure(figsize=(6,4))
         plt.plot(curve['abstention'], curve['risk'], marker='o', linewidth=1)
-        plt.gca().invert_xaxis()
+        try:
+            if not self._is_distance_metric(metric):
+                plt.yscale('log')
+        except Exception:
+            pass
         plt.xlabel('% abstention')
         plt.ylabel(metric)
         plt.title(f"Selective curve: {measure} ({metric}), AURC={curve.get('aurc'):.4f}")
+        plt.grid(True, linestyle='--', alpha=0.4)
+        plt.tight_layout()
+        plt.savefig(path, dpi=150)
+        plt.close()
+        return path
+
+    def plot_measures_combined(self, curves_by_measure, metric, out_dir='runs/_selective', filename=None):
+        """Plot multiple measures' selective curves for a single metric on one figure.
+
+        curves_by_measure: dict mapping measure -> curve dict (with 'abstention', 'risk', optionally 'aurc')
+        metric: name of the metric (used for title/filename)
+        """
+        os.makedirs(out_dir, exist_ok=True)
+        safe_metric = str(metric).replace(' ', '_')
+        if filename is None:
+            filename = f"selective_measures_{safe_metric}.png"
+        path = os.path.join(out_dir, filename)
+
+        plt.figure(figsize=(8,6))
+        plotted_any = False
+        for measure, curve in curves_by_measure.items():
+            if not isinstance(curve, dict) or 'abstention' not in curve or 'risk' not in curve:
+                continue
+            try:
+                order = np.argsort(curve['abstention'])
+                abst = np.asarray(curve['abstention'])[order]
+                risk = np.asarray(curve['risk'])[order]
+            except Exception:
+                continue
+            auc = curve.get('aurc')
+            label = f"{measure}"
+            if auc is not None:
+                try:
+                    label = f"{measure} (AURC={auc:.4f})"
+                except Exception:
+                    pass
+            plt.plot(abst, risk, marker='o', linewidth=1, label=label)
+            plotted_any = True
+
+        if not plotted_any:
+            plt.close()
+            return None
+
+        try:
+            if not self._is_distance_metric(metric):
+                plt.yscale('log')
+        except Exception:
+            pass
+
+        plt.xlabel('% abstention')
+        plt.ylabel(metric)
+        plt.title(f"Selective curves (all measures) - {metric}")
+        plt.legend(loc='best')
         plt.grid(True, linestyle='--', alpha=0.4)
         plt.tight_layout()
         plt.savefig(path, dpi=150)
@@ -137,15 +221,37 @@ class SelectivePrediction(ExperimentBase):
         results = {}
         # Default measures: all columns in df_scores
         measures = measures or list(df_scores.columns)
+        # collect curves per metric so we can plot all measures together per metric
+        curves_by_metric = {metric: {} for metric in metrics}
         for measure in measures:
             results.setdefault(measure, {})
             for metric in metrics:
                 try:
+                    # create a subdirectory for this metric inside out_dir
+                    safe_metric = str(metric).replace(' ', '_')
+                    metric_dir = os.path.join(out_dir, safe_metric)
+                    os.makedirs(metric_dir, exist_ok=True)
+
                     curve = self.compute_selective_curve(df_scores, measure, metric, steps=steps)
-                    png = self.plot_selective_curve(curve, out_dir=out_dir)
+                    png = self.plot_selective_curve(curve, out_dir=metric_dir)
                     results[measure][metric] = {'aurc': curve['aurc'], 'png': png}
+                    curves_by_metric[metric][measure] = curve
                 except Exception as e:
                     results[measure][metric] = {'error': str(e)}
+                    curves_by_metric[metric][measure] = {'error': str(e)}
+
+        # For each metric, plot all measures on the same graph inside that metric's folder
+        results.setdefault('_combined_by_metric', {})
+        for metric, curves_dict in curves_by_metric.items():
+            try:
+                safe_metric = str(metric).replace(' ', '_')
+                metric_dir = os.path.join(out_dir, safe_metric)
+                os.makedirs(metric_dir, exist_ok=True)
+                combined_png = self.plot_measures_combined(curves_dict, metric, out_dir=metric_dir)
+                if combined_png is not None:
+                    results['_combined_by_metric'][metric] = {'png': combined_png}
+            except Exception as e:
+                results['_combined_by_metric'][metric] = {'error': str(e)}
         # Save summary JSON
         summary_path = os.path.join(out_dir, 'selective_summary.json')
         io_utils.write_json(results, summary_path)

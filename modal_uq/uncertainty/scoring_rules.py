@@ -2,6 +2,7 @@
 import numpy as np
 from .base import UncertaintyBase
 from ..registry import register
+import scipy.integrate as integrate
 
 @register('uncertainty','nll')
 class NLLScore(UncertaintyBase):
@@ -20,4 +21,4 @@ class CRPSProxy(UncertaintyBase):
         y_grid = model.default_y_grid(X)
         dens = model.predict_density(X, y_grid)
         cdf = np.cumsum(dens, axis=1); cdf /= (cdf[:,-1][:,None] + 1e-12)
-        return np.trapz(np.abs(cdf - 0.5), y_grid, axis=1)
+        return integrate.trapezoid(np.abs(cdf - 0.5), y_grid, axis=1)

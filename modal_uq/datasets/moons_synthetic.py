@@ -1,6 +1,7 @@
 # modal_uq/datasets/moons_synthetic.py
 from typing import Optional, Tuple, Sequence, Callable
 import numpy as np
+import scipy.integrate as integrate
 import pandas as pd
 from sklearn.datasets import make_moons
 
@@ -241,7 +242,7 @@ class MoonsSyntheticDataset:
                 for k in range(n_modes):
                     base = (1.0 / (np.sqrt(2.0 * np.pi) * sigma[k])) * np.exp(-0.5 * ((y_grid - mu[k]) / sigma[k]) ** 2)
                     try:
-                        base_int = float(np.trapz(base, y_grid))
+                        base_int = float(integrate.trapezoid(base, y_grid))
                     except Exception:
                         base_int = 0.0
                     if base_int > 0:
@@ -269,7 +270,7 @@ class MoonsSyntheticDataset:
                         pred = np.asarray(predictive_density[ix])
                     else:
                         pred = np.asarray(predictive_density[idx])
-                    pred_int = float(np.trapz(pred, y_grid))
+                    pred_int = float(integrate.trapezoid(pred, y_grid))
                 except Exception:
                     pred_int = 0.0
                     pred = None

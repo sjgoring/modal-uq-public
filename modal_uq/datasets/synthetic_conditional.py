@@ -8,6 +8,7 @@ Synthetic Multi-Modal Regression Data Generator (Conditional Sampling Version)
 - Usable as a dataset module or standalone script (CSV + plots)
 """
 import numpy as np
+import scipy.integrate as integrate
 import pandas as pd
 import matplotlib.pyplot as plt
 from typing import Optional, Sequence, Tuple, Union, Callable, Dict
@@ -144,7 +145,7 @@ class SyntheticMultiModalConditionalDataset:
             for k in range(self.n_modes):
                 base = (1.0 / (np.sqrt(2.0 * np.pi) * sigma[k])) * np.exp(-0.5 * ((y_grid - mu[k]) / sigma[k]) ** 2)
                 try:
-                    base_int = float(np.trapz(base, y_grid))
+                        base_int = float(integrate.trapezoid(base, y_grid))
                 except Exception:
                     base_int = 0.0
                 if base_int > 0:
@@ -170,7 +171,7 @@ class SyntheticMultiModalConditionalDataset:
                         pred = np.asarray(predictive_density[ix])
                     else:
                         pred = np.asarray(predictive_density[idx])
-                    pred_int = float(np.trapz(pred, y_grid))
+                    pred_int = float(integrate.trapezoid(pred, y_grid))
                 except Exception:
                     pred_int = 0.0
                     pred = None

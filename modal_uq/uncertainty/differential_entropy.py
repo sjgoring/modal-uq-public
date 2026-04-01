@@ -1,6 +1,7 @@
 import numpy as np
 from .base import UncertaintyBase
 from ..registry import register
+import scipy.integrate as integrate
 
 @register('uncertainty','differential_entropy')
 class DifferentialEntropy(UncertaintyBase):
@@ -33,7 +34,7 @@ class DifferentialEntropy(UncertaintyBase):
         """
         Normalize densities along the last axis (G), regardless of arr being [N,G] or [S,N,G].
         """
-        Z = np.trapz(arr, y_grid, axis=-1)
+        Z = integrate.trapezoid(arr, y_grid, axis=-1)
         Z = np.expand_dims(Z, axis=-1)         # -> [N,1] or [S,N,1]
         return arr / (Z + 1e-12)
 
@@ -66,7 +67,7 @@ class DifferentialEntropy(UncertaintyBase):
         integrand = np.where(dens > 0, integrand, 0.0)
 
         # Integrate
-        H = -np.trapz(integrand, y_grid, axis=-1)
+        H = -integrate.trapezoid(integrand, y_grid, axis=-1)
         return H
 
     @staticmethod
@@ -89,8 +90,8 @@ class DifferentialEntropy(UncertaintyBase):
             KL(p || q), clipped to be non-negative for numerical stability
         """
         # Normalize both densities
-        p = p / (np.trapz(p, y_grid) + 1e-12)
-        q = q / (np.trapz(q, y_grid) + 1e-12)
+        p = p / (integrate.trapezoid(p, y_grid) + 1e-12)
+        q = q / (integrate.trapezoid(q, y_grid) + 1e-12)
         
         # Clip q to avoid log(0)
         q = np.clip(q, 1e-40, None)
@@ -100,7 +101,7 @@ class DifferentialEntropy(UncertaintyBase):
         integrand = np.where(p > 0, integrand, 0.0)  # Force 0*log(0) = 0
         
         # Integrate
-        kl = np.trapz(integrand, y_grid)
+        kl = integrate.trapezoid(integrand, y_grid)
         return np.maximum(kl, 0)  # Ensure non-negative
 
     def score(self, model, X, y_true=None):

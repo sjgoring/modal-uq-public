@@ -2,6 +2,7 @@ import numpy as np
 from .base import UncertaintyBase
 from ..registry import register
 from scipy.stats import gaussian_kde
+import scipy.integrate as integrate
 
 @register('uncertainty','quest')
 class QUESTUncertainty(UncertaintyBase):
@@ -33,7 +34,7 @@ class QUESTUncertainty(UncertaintyBase):
         """
         Normalize densities along the last axis (G), regardless of arr being [N,G] or [S,N,G].
         """
-        Z = np.trapz(arr, y_grid, axis=-1)     # shape: [N] or [S,N]
+        Z = integrate.trapezoid(arr, y_grid, axis=-1)     # shape: [N] or [S,N]
         Z = np.expand_dims(Z, axis=-1)         # -> [N,1] or [S,N,1]
         return arr / (Z + 1e-12)
 
@@ -100,7 +101,7 @@ class QUESTUncertainty(UncertaintyBase):
         y_grid = np.asarray(y_grid)
 
         # Normalize densities along grid axis
-        Z = np.trapz(dens, y_grid, axis=-1)[:, None] + 1e-12
+        Z = integrate.trapezoid(dens, y_grid, axis=-1)[:, None] + 1e-12
         p = dens / Z  # now integrates to 1
 
         # Sort densities descending along grid axis
@@ -223,7 +224,7 @@ class QUESTUncertainty(UncertaintyBase):
             mask = density >= threshold
             lebesgue_measure = np.sum(mask * dv)
             quest_curve.append(lebesgue_measure)
-        meta = np.trapz(quest_curve, alpha_grid)
+        meta = integrate.trapezoid(quest_curve, alpha_grid)
         return float(np.maximum(meta, 0.0))
 
     def meta_quest(self, model=None, theta_samples=None, n_param_samples=None):

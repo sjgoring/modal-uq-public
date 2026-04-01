@@ -1,6 +1,7 @@
 
 from abc import ABC, abstractmethod
 import numpy as np
+import scipy.integrate as integrate
 
 
 class MarginalizationConfig:
@@ -131,8 +132,8 @@ class ModelBase(ABC):
 
     def predict_moments(self, X, y_grid, context='predict'):
         dens = self.predict_density(X, y_grid, context=context)
-        dens = dens / (np.trapz(dens, y_grid, axis=1, keepdims=True) + 1e-12)
-        Ey  = np.trapz(dens * y_grid[None,:], y_grid, axis=1)
-        Ey2 = np.trapz(dens * (y_grid[None,:]**2), y_grid, axis=1)
+        dens = dens / (integrate.trapezoid(dens, y_grid, axis=1)[:, None] + 1e-12)
+        Ey  = integrate.trapezoid(dens * y_grid[None,:], y_grid, axis=1)
+        Ey2 = integrate.trapezoid(dens * (y_grid[None,:]**2), y_grid, axis=1)
         Var = Ey2 - Ey**2
         return Ey, Var

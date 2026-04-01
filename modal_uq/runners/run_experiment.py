@@ -15,7 +15,7 @@ from ..pgt.conditional_kde import ConditionalKDE
 
 from ..models.mdn import MixtureDensityModel
 # from ..models.ensemble import Ensemble
-from ..models.bnn_vi import BayesianNNVI
+# from ..models.bnn_vi import BayesianNNVI
 # from ..models.gp import GaussianProcessModel
 
 from ..uncertainty.variance import PredictiveVariance

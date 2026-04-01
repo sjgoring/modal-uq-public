@@ -1,5 +1,6 @@
 
 import numpy as np
+import scipy.integrate as integrate
 from .base import AcquisitionBase
 from ..registry import register
 
@@ -10,6 +11,6 @@ class ModalEntropy(AcquisitionBase):
     def score(self, model, X_pool):
         y_grid = model.default_y_grid(X_pool, grid_points=self.grid_points, y_pad=self.y_pad)
         dens = model.predict_density(X_pool, y_grid)
-        dens /= (np.trapz(dens, y_grid, axis=1, keepdims=True) + 1e-12)
-        H = -np.trapz(dens * (np.log(dens + 1e-12)), y_grid, axis=1)
+        dens /= (integrate.trapezoid(dens, y_grid, axis=1)[:, None] + 1e-12)
+        H = -integrate.trapezoid(dens * (np.log(dens + 1e-12)), y_grid, axis=1)
         return H

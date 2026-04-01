@@ -7,6 +7,7 @@ change over x (split into thirds). The class mirrors the style of
 """
 from typing import Optional, Tuple
 import numpy as np
+import scipy.integrate as integrate
 import pandas as pd
 from ..registry import register
 
@@ -131,7 +132,7 @@ class SyntheticConstantVarDataset:
             dens2 = (1.0 / (np.sqrt(2 * np.pi) * sigma_2[idx])) * np.exp(-0.5 * ((y_grid - mu_2[idx]) / sigma_2[idx]) ** 2)
             y_dens_raw = dens1 * pi1[idx] + dens2 * pi2[idx]
             # normalize to form proper density
-            y_dens = y_dens_raw / np.trapz(y_dens_raw, y_grid)
+            y_dens = y_dens_raw / integrate.trapezoid(y_dens_raw, y_grid)
             y_densities.append(y_dens)
 
             # draw a sample by discrete sampling from grid proportional to density
@@ -287,7 +288,7 @@ class SyntheticConstantVarDataset:
                 for k in range(n_modes):
                     base = (1.0 / (np.sqrt(2.0 * np.pi) * sigma[k])) * np.exp(-0.5 * ((y_grid - mu[k]) / sigma[k]) ** 2)
                     try:
-                        base_int = float(np.trapz(base, y_grid))
+                        base_int = float(integrate.trapezoid(base, y_grid))
                     except Exception:
                         base_int = 0.0
                     if base_int > 0:
@@ -314,7 +315,7 @@ class SyntheticConstantVarDataset:
                         pred = np.asarray(predictive_density[ix])
                     else:
                         pred = np.asarray(predictive_density[idx])
-                    pred_int = float(np.trapz(pred, y_grid))
+                    pred_int = float(integrate.trapezoid(pred, y_grid))
                 except Exception:
                     pred_int = 0.0
                     pred = None
@@ -380,3 +381,18 @@ class SyntheticConstantVarDataset:
         mode_idx = np.argmax(pi, axis=1)
         y_mode_true = np.array([mu_vals[i, mode_idx[i]] for i in range(n)])
         return y_mode_true
+    
+    def gt_dens(self, X, y_grid):
+        """Return ground-truth conditional density on y_grid for each row in X."""
+        n = X.shape[0]
+        pi1, pi2, mu_1, mu_2, sigma_1, sigma_2 = self._mixture_params(X)
+        
+        # y_grid = np.linspace(self.y_min, self.y_max, self.y_grid_size)
+        y_densities = []
+        for i in range(n):
+            dens1 = (1.0 / (np.sqrt(2 * np.pi) * sigma_1[i])) * np.exp(-0.5 * ((y_grid - mu_1[i]) / sigma_1[i]) ** 2)
+            dens2 = (1.0 / (np.sqrt(2 * np.pi) * sigma_2[i])) * np.exp(-0.5 * ((y_grid - mu_2[i]) / sigma_2[i]) ** 2)
+            y_dens_raw = dens1 * pi1[i] + dens2 * pi2[i]
+            y_dens = y_dens_raw / integrate.trapezoid(y_dens_raw, y_grid)
+            y_densities.append(y_dens)
+        return np.vstack(y_densities)

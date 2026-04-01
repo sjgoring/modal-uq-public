@@ -1,6 +1,7 @@
 import numpy as np
 from .base import UncertaintyBase
 from ..registry import register
+import scipy.integrate as integrate
 
 @register('uncertainty','variance')
 class PredictiveVariance(UncertaintyBase):
@@ -31,7 +32,7 @@ class PredictiveVariance(UncertaintyBase):
         """
         Normalize densities along the last axis (G), regardless of arr being [N,G] or [S,N,G].
         """
-        Z = np.trapz(arr, y_grid, axis=-1)     # shape: [N] or [S,N]
+        Z = integrate.trapezoid(arr, y_grid, axis=-1)     # shape: [N] or [S,N]
         Z = np.expand_dims(Z, axis=-1)         # -> [N,1] or [S,N,1]
         return arr / (Z + 1e-12)
 
@@ -50,8 +51,8 @@ class PredictiveVariance(UncertaintyBase):
         else:                # [N,G]
             y = y[None, :]              # -> [1,G]
 
-        Ey  = np.trapz(dens * y,          y_grid, axis=-1)  # [N] or [S,N]
-        Ey2 = np.trapz(dens * (y**2),     y_grid, axis=-1)  # [N] or [S,N]
+        Ey  = integrate.trapezoid(dens * y,          y_grid, axis=-1)  # [N] or [S,N]
+        Ey2 = integrate.trapezoid(dens * (y**2),     y_grid, axis=-1)  # [N] or [S,N]
         Var = Ey2 - Ey**2                                   # [N] or [S,N]
         return Ey, Var
 

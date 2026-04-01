@@ -54,7 +54,12 @@
   },
   "metrics": {
     "primary": [
-      "moae"    
+      "moae",
+      "mose",
+      "lr_true",
+      "lr_est",
+      "coverage_true",
+      "coverage_est" 
     ],
     "distributional": [
       "nll",
