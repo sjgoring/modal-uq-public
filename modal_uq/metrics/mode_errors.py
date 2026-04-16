@@ -34,6 +34,12 @@ def likelihood_ratio_measure(y_true, y_mode_pred, kwargs_dict):
     print("Debug - likelihood_ratio_measure input shapes:")
     print("y_true", y_true.shape, "y_mode_pred", y_mode_pred.shape, "true_dens", true_dens.shape, "est_dens", est_dens.shape, "y_grid", y_grid.shape)
 
+    # Debug: Checking y_true and y_mode_pred against argmax of true_dens and est_dens respectively.
+    print("Debug - Checking y_true and y_mode_pred against argmax of true_dens and est_dens respectively.")
+    print("true_dens correct", np.equal(y_true, y_grid[true_dens.argmax(axis=1)]))
+    print("est_dens correct", np.equal(y_mode_pred, y_grid[est_dens.argmax(axis=1)]))
+    
+    quit()
     # normalise incoming densities as empirical probabilities
     true_dens = true_dens / (true_dens.sum(axis=1)[:, None] + 1e-12)
     est_dens = est_dens / (est_dens.sum(axis=1)[:, None] + 1e-12)
@@ -42,6 +48,7 @@ def likelihood_ratio_measure(y_true, y_mode_pred, kwargs_dict):
         # relative likelihood of y^ against y* under p*. That is, p*(y^) / p*(y*).
         p_ystar = true_dens[np.arange(len(y_true)), np.abs(y_grid[None,:] - y_true[:,None]).argmin(axis=1)]
         p_yhat = true_dens[np.arange(len(y_true)), np.abs(y_grid[None,:] - y_mode_pred[:,None]).argmin(axis=1)]
+        print("Debug - likelihood_ratio_measure p_ystar < p_hat?", np.mean(p_ystar < p_yhat))
         return float(np.mean(p_yhat / (p_ystar + 1e-12)))
     elif reference_dist == "est":
         # relative likelihood of y* against y^ under p^. That is, p^(y*) / p^(y^).

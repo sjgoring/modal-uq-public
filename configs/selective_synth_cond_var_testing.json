@@ -1,0 +1,60 @@
+{
+  "experiment": {
+    "type": "selective",
+    "seed": 42,
+    "output_dir": "runs/selective_synth_cond_var",
+    "needs_psuedo_ground_truth": false
+  },
+  "dataset": {
+    "name": "synthetic_constant_var",
+    "params":{
+        "n_samples" : 1000
+      }
+    } 
+  ,
+  "pseudo_ground_truth": {
+    "name": "conditional_kde",
+    "params": {
+      "bandwidth": 0.5
+    }
+  }
+  ,
+  "model": {
+    "name": "mdn",
+  "params": {
+    "hidden_dim" : 50,
+          "n_gaussians" : 2,
+    "epochs" : 1,
+    "lr" : 1e-5,
+    "weight_decay" : 1e-4
+  },
+    "marginalization": {
+      "predict": "bma_expected",         
+      "approximate": "point_estimate",   
+      "point_estimate_criterion": "mle" 
+      }
+  },
+  "uncertainty": {
+  "measures": [
+    { "name": "quest", "params": { "decomposition": "total",     "label": "quest_total_32%" , "alpha":0.32} }
+  ]
+},
+  "correlation": {
+    "enabled": true,
+    "method": [
+      "pearson",
+      "spearman"
+    ],
+    "output_dir": "runs/_correlation"
+  },
+  "metrics": {
+    "primary": [
+      "lr_true",
+      "coverage_est"
+    ],
+    "distributional": [
+      "nll",
+      "crps"
+    ]
+  }
+}
