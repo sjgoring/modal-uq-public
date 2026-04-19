@@ -50,7 +50,10 @@ def run_from_config(config_path: str):
 
     # ---- Model ----
     model_cfg = cfg['model']
-    model = build('model', model_cfg['name'], **model_cfg.get('params', {}))
+    model_params = dict(model_cfg.get('params', {}))
+    if 'inferential_choice' in model_cfg:
+        model_params['inferential_choice'] = model_cfg['inferential_choice']
+    model = build('model', model_cfg['name'], **model_params)
 
     # ---- Experiment ----
     exp = build(

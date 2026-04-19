@@ -136,32 +136,21 @@ class QUESTUncertainty(UncertaintyBase):
     
     def _compute_total(self, model, X):
         y_grid = model.default_y_grid(X, grid_points=self.grid_points, y_pad=self.y_pad)
-        
-        try:
-            dens_pred = model.predict_density_samples(X, y_grid, context='predict', n_samples=self.n_param_samples)   # [S,N,G]
-            threshold_pred, mask_pred = self._hdr_from_density(dens_pred, y_grid, self.alpha)
-            lebesgue_pred = self._lebesgue_measure_hdr(mask_pred, y_grid)   # [N]
-            return lebesgue_pred
-            
-        except Exception:
-            # Deterministic fallback
-            dens_pred = model.predict_density(X, y_grid, context='predict')
-            threshold_pred, mask_pred = self._hdr_from_density(dens_pred, y_grid, self.alpha)
-            lebesgue_pred = self._lebesgue_measure_hdr(mask_pred, y_grid)
-            return lebesgue_pred
+        dens_pred = self._predict_density_collection(model, X, y_grid, context='predict')
+        alpha_volume_s = []
+        for s in range(dens_pred.shape[0]):
+            _, mask_pred = self._hdr_from_density(dens_pred[s], y_grid, self.alpha)
+            alpha_volume_s.append(self._lebesgue_measure_hdr(mask_pred, y_grid))
+        return np.mean(np.stack(alpha_volume_s, axis=0), axis=0)
 
     def _compute_aleatoric(self, model, X):
         y_grid = model.default_y_grid(X, grid_points=self.grid_points, y_pad=self.y_pad)
-        try:
-            dens_approx = model.predict_density_samples(X, y_grid, context='approximate', n_samples=self.n_param_samples)
-            threshold_approx, mask_approx = self._hdr_from_density(dens_approx, y_grid, self.alpha)
-            lebesgue_approx = self._lebesgue_measure_hdr(mask_approx, y_grid)
-            return lebesgue_approx
-        except Exception:
-            dens_approx = model.predict_density(X, y_grid, context='approximate')
-            threshold_approx, mask_approx = self._hdr_from_density(dens_approx, y_grid, self.alpha)
-            lebesgue_approx = self._lebesgue_measure_hdr(mask_approx, y_grid)
-            return lebesgue_approx
+        dens_approx = self._predict_density_collection(model, X, y_grid, context='approximate')
+        alpha_volume_s = []
+        for s in range(dens_approx.shape[0]):
+            _, mask_approx = self._hdr_from_density(dens_approx[s], y_grid, self.alpha)
+            alpha_volume_s.append(self._lebesgue_measure_hdr(mask_approx, y_grid))
+        return np.mean(np.stack(alpha_volume_s, axis=0), axis=0)
 
     def _compute_epistemic(self, model, X):
         # Integrated volume on parameter posterior per input.

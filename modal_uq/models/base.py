@@ -2,6 +2,7 @@
 from abc import ABC, abstractmethod
 import numpy as np
 import scipy.integrate as integrate
+import warnings
 
 
 class InferentialChoiceConfig:
@@ -10,20 +11,27 @@ class InferentialChoiceConfig:
     Parameters
     ----------
     predict : str
-        inferential_choice strategy for prediction: 'bma_expected', 'posterior_weighted', 
-        or 'point_estimate'. Includes epistemic uncertainty.
+        inferential_choice strategy for prediction: 'posterior_predictive' or 'bma'.
+        Legacy aliases ('bma_expected', 'posterior_weighted', 'point_estimate')
+        are accepted for compatibility.
     approximate : str
-        inferential_choice strategy for approximating true DGP: 'point_estimate', 
-        'bma_expected', or 'posterior_weighted'. Usually point_estimate.
+        inferential_choice strategy for approximation: 'posterior_predictive' or 'bma'.
+        Legacy aliases ('bma_expected', 'posterior_weighted', 'point_estimate')
+        are accepted for compatibility.
     point_estimate_criterion : str
         Criterion for selecting parameters when strategy is 'point_estimate':
         'mle' (maximum likelihood, default), 'map', 'mean', or 'median'.
     """
     
-    VALID_STRATEGIES = {'point_estimate', 'bma_expected', 'posterior_weighted'}
+    VALID_STRATEGIES = {'posterior_predictive', 'bma', 'point_estimate', 'bma_expected', 'posterior_weighted'}
+    CANONICAL_STRATEGIES = {'posterior_predictive', 'bma'}
+    STRATEGY_ALIASES = {
+        'bma_expected': 'bma',
+        'posterior_weighted': 'bma',
+    }
     VALID_CRITERIA = {'mle', 'map', 'mean', 'median'}
     
-    def __init__(self, predict: str = 'bma_expected', approximate: str = 'point_estimate', 
+    def __init__(self, predict: str = 'posterior_predictive', approximate: str = 'posterior_predictive', 
                  point_estimate_criterion: str = 'mle'):
         # Validate strategies
         if predict not in self.VALID_STRATEGIES:
@@ -38,6 +46,13 @@ class InferentialChoiceConfig:
         self.predict = predict
         self.approximate = approximate
         self.point_estimate_criterion = point_estimate_criterion
+
+    @staticmethod
+    def canonicalize_strategy(strategy: str) -> str:
+        """Map legacy strategy labels to canonical values."""
+        if strategy in InferentialChoiceConfig.STRATEGY_ALIASES:
+            return InferentialChoiceConfig.STRATEGY_ALIASES[strategy]
+        return strategy
     
     @classmethod
     def from_dict(cls, config_dict):
@@ -67,10 +82,9 @@ class InferentialChoiceConfig:
 class ModelBase(ABC):
     """Base API for predictive density models.
 
-    Optional stochastic extensions:
-      - predict_density_samples: return multiple parameter-sampled densities [S,N,G]
-      - predict_mixture_params: return deterministic mixture params (for MDN)
-      - inferential_choice: configuration for dual inferential_choice contexts (predict vs. approximate)
+        Optional stochastic extensions:
+            - predict_density: can return either [N,G] or [S,N,G]
+            - inferential_choice: configuration for dual inferential_choice contexts (predict vs. approximate)
     
     Parameters
     ----------
@@ -85,6 +99,41 @@ class ModelBase(ABC):
     def get_inferential_choice_config(self):
         """Get the inferential_choice configuration for this model."""
         return self._inferential_choice_config
+
+    def _validate_context(self, context: str):
+        if context not in {'predict', 'approximate'}:
+            raise ValueError(f"context must be one of {{'predict', 'approximate'}}, got {context}")
+
+    def resolve_inferential_choice(self, context='predict'):
+        """Resolve inferential choice for a context to a canonical implemented mode."""
+        self._validate_context(context)
+        cfg = self.get_inferential_choice_config()
+        raw = cfg.predict if context == 'predict' else cfg.approximate
+        canonical = InferentialChoiceConfig.canonicalize_strategy(raw)
+
+        if raw in InferentialChoiceConfig.STRATEGY_ALIASES:
+            warnings.warn(
+                f"inferential_choice='{raw}' is deprecated; using '{canonical}'.",
+                UserWarning,
+                stacklevel=2,
+            )
+
+        if canonical == 'point_estimate':
+            warnings.warn(
+                "inferential_choice='point_estimate' is compatibility-only and maps to "
+                "'posterior_predictive' in active code paths.",
+                UserWarning,
+                stacklevel=2,
+            )
+            canonical = 'posterior_predictive'
+
+        if canonical not in InferentialChoiceConfig.CANONICAL_STRATEGIES:
+            raise NotImplementedError(
+                f"inferential_choice='{raw}' is not implemented. "
+                "Implemented choices: {'posterior_predictive', 'bma'}."
+            )
+
+        return canonical
     
     @abstractmethod
     def fit(self, X, y, X_val=None, y_val=None): ...
@@ -92,8 +141,20 @@ class ModelBase(ABC):
     @abstractmethod
     def predict_density(self, X, y_grid, context='predict'): ...
 
+    def get_second_order_distribution(self, X, y_grid, context='predict'):
+        """Return a second-order distribution representation for uncertainty estimation.
+
+        Stochastic models should override this to provide parameter-induced distributional
+        variability. Deterministic models should keep the default NotImplementedError.
+        """
+        raise NotImplementedError(
+            f"{self.__class__.__name__} does not implement a second-order distribution provider."
+        )
+
     def predict_mode(self, X, y_grid, context='predict'):
         dens = self.predict_density(X, y_grid, context=context)
+        if dens.ndim == 3:
+            dens = np.mean(dens, axis=0)
         idx = dens.argmax(axis=1)
         return y_grid[idx]
 
@@ -107,31 +168,27 @@ class ModelBase(ABC):
         return np.linspace(lo - pad, hi + pad, grid_points)
 
     def predict_density_samples(self, X, y_grid, context='predict', n_samples: int = 20):
-        """Return parameter-sampled densities.
-        
-        Parameters
-        ----------
-        X : array
-            Input features
-        y_grid : array
-            Output grid
-        context : {'predict', 'approximate'}, default='predict'
-            inferential_choice context:
-            - 'predict': Include epistemic uncertainty (marginalize over parameters)
-            - 'approximate': Best guess of true DGP (point estimate of parameters)
-        n_samples : int
-            Number of parameter samples to draw
-            
-        Returns
-        -------
-        dens : array of shape [S, N, G]
-            Density samples where S=n_samples, N=number of inputs, G=grid size
+        """Compatibility wrapper over ``predict_density``.
+
+        The active API is ``predict_density`` returning either [N,G] or [S,N,G].
+        This method is retained for compatibility and always returns [S,N,G].
         """
+        warnings.warn(
+            "predict_density_samples is deprecated. Use predict_density and handle [N,G] or [S,N,G].",
+            UserWarning,
+            stacklevel=2,
+        )
         dens = self.predict_density(X, y_grid, context=context)
+        if dens.ndim == 3:
+            return dens
+        if dens.ndim != 2:
+            raise ValueError("predict_density must return [N,G] or [S,N,G].")
         return np.repeat(dens[None, ...], n_samples, axis=0)
 
     def predict_moments(self, X, y_grid, context='predict'):
         dens = self.predict_density(X, y_grid, context=context)
+        if dens.ndim == 3:
+            dens = np.mean(dens, axis=0)
         dens = dens / (integrate.trapezoid(dens, y_grid, axis=1)[:, None] + 1e-12)
         Ey  = integrate.trapezoid(dens * y_grid[None,:], y_grid, axis=1)
         Ey2 = integrate.trapezoid(dens * (y_grid[None,:]**2), y_grid, axis=1)

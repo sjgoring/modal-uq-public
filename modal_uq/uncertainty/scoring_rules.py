@@ -14,10 +14,13 @@ class NLLScore(UncertaintyBase):
         if y_true is None:
             raise ValueError('NLL requires y_true')
         y_grid = model.default_y_grid(X)
-        dens = model.predict_density(X, y_grid)
+        dens = self._predict_density_collection(model, X, y_grid, context='predict')
         idx = np.abs(y_grid[None,:] - y_true[:,None]).argmin(axis=1)
-        p = dens[np.arange(len(y_true)), idx] + 1e-12
-        return -np.log(p)
+        nll_scores = []
+        for s in range(dens.shape[0]):
+            p = dens[s, np.arange(len(y_true)), idx] + 1e-12
+            nll_scores.append(-np.log(p))
+        return np.mean(np.stack(nll_scores, axis=0), axis=0)
 
     def score_aleatoric(self, model, X, y_true=None):
         raise NotImplementedError('NLL does not define an aleatoric decomposition.')
@@ -42,9 +45,13 @@ class CRPSProxy(UncertaintyBase):
 
     def score_total(self, model, X, y_true=None):
         y_grid = model.default_y_grid(X)
-        dens = model.predict_density(X, y_grid)
-        cdf = np.cumsum(dens, axis=1); cdf /= (cdf[:,-1][:,None] + 1e-12)
-        return integrate.trapezoid(np.abs(cdf - 0.5), y_grid, axis=1)
+        dens = self._predict_density_collection(model, X, y_grid, context='predict')
+        crps_scores = []
+        for s in range(dens.shape[0]):
+            cdf = np.cumsum(dens[s], axis=1)
+            cdf /= (cdf[:, -1][:, None] + 1e-12)
+            crps_scores.append(integrate.trapezoid(np.abs(cdf - 0.5), y_grid, axis=1))
+        return np.mean(np.stack(crps_scores, axis=0), axis=0)
 
     def score_aleatoric(self, model, X, y_true=None):
         raise NotImplementedError('CRPS proxy does not define an aleatoric decomposition.')

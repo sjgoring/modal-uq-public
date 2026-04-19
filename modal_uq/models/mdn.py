@@ -1,4 +1,5 @@
 import numpy as np
+import warnings
 from skmdn import MixtureDensityEstimator
 
 from .base import ModelBase
@@ -25,6 +26,19 @@ class MixtureDensityModel(ModelBase):
         self._y_max = np.max(y)
 
     def predict_density(self, X, y_grid, context='predict'):
+        strategy = self.resolve_inferential_choice(context=context)
+        if strategy == 'bma':
+            raise NotImplementedError(
+                "BMA inferential choice is not implemented for MixtureDensityModel because it is deterministic."
+            )
+
+        warnings.warn(
+            "MixtureDensityModel is deterministic; using posterior_predictive as a compatibility path "
+            "(this is not a true posterior predictive over parameter uncertainty).",
+            UserWarning,
+            stacklevel=2,
+        )
+
         # Predict mean and std for each X
         # mu, std = self.mdn.predict(X, return_std=True)
         # std = np.maximum(std, 1e-6)  # Avoid zero std
@@ -39,6 +53,11 @@ class MixtureDensityModel(ModelBase):
         # print(out)
         return out
         # The above works on the assumption the y_grid is the same as the one used in the MDN fit. If we want to allow arbitrary y_grids, we may need to compute the density manually from the predicted mixture parameters.
+
+    def get_second_order_distribution(self, X, y_grid, context='predict'):
+        raise NotImplementedError(
+            "MixtureDensityModel is deterministic and does not provide a second-order distribution."
+        )
 
     # def predict_mixture_params(self, X):
     #     mu, std = self.gp.predict(X, return_std=True)

@@ -1,6 +1,6 @@
 
 import numpy as np
-from .base import ModelBase, InferentialChoiceConfig
+from .base import ModelBase
 from ..registry import register, build
 
 @register('model','ensemble')
@@ -80,7 +80,7 @@ class Ensemble(ModelBase):
             raise ValueError(f"Unknown criterion: {criterion}")
     
     def predict_density(self, X, y_grid, context='predict'):
-        """Predict density using specified inferential_choice context.
+        """Predict density collection using canonical inferential choice.
         
         Parameters
         ----------
@@ -93,82 +93,33 @@ class Ensemble(ModelBase):
             
         Returns
         -------
-        dens : array of shape [N, G]
-            Predicted density
+        dens : array
+            [N,G] for posterior_predictive, [S,N,G] for bma.
         """
-        config = self.get_inferential_choice_config()
-        
-        # Select which strategy to use based on context
-        strategy = config.predict if context == 'predict' else config.approximate
-        
-        # Get member densities
-        member_dens = [m.predict_density(X, y_grid) for m in self.members]
-        member_dens = np.stack(member_dens, axis=0)  # [M, N, G]
-        
-        if strategy == 'bma_expected':
-            # Average over members
-            return np.mean(member_dens, axis=0)  # [N, G]
-        
-        elif strategy == 'point_estimate':
-            # Select single member
-            idx = self._select_member_by_criterion(config.point_estimate_criterion)
-            return member_dens[idx]  # [N, G]
-        
-        elif strategy == 'posterior_weighted':
-            # Return weighted average (weights based on likelihoods)
-            if self._member_losses is None:
-                raise RuntimeError("Member losses not computed. Call fit() first.")
-            weights = np.exp(-self._member_losses)  # [M]
-            weights = weights / weights.sum()  # Normalize
-            return np.average(member_dens, axis=0, weights=weights)  # [N, G]
-        
-        else:
-            raise ValueError(f"Unknown strategy: {strategy}")
+        strategy = self.resolve_inferential_choice(context=context)
 
-    def predict_density_samples(self, X, y_grid, context='predict', n_samples: int = None):
-        """Get ensemble member densities as samples.
-        
-        Parameters
-        ----------
-        X : array
-            Input features
-        y_grid : array
-            Output grid
-        context : {'predict', 'approximate'}, default='predict'
-            inferential_choice context
-        n_samples : int, optional
-            Ignored; ensemble has fixed number of members
-            
-        Returns
-        -------
-        dens : array of shape [S, N, G]
-            Sampled densities where S is number of members
-        """
-        config = self.get_inferential_choice_config()
-        
-        # Select which strategy to use based on context
-        strategy = config.predict if context == 'predict' else config.approximate
-        
-        # Get member densities
+        # Get member densities [M,N,G]
         member_dens = [m.predict_density(X, y_grid) for m in self.members]
-        member_dens = np.stack(member_dens, axis=0)  # [M, N, G]
-        
-        if strategy == 'bma_expected':
-            # Return averaged density as single sample
-            avg_dens = np.mean(member_dens, axis=0)  # [N, G]
-            return avg_dens[None, :, :]  # [1, N, G]
-        
-        elif strategy == 'point_estimate':
-            # Return single member density
-            idx = self._select_member_by_criterion(config.point_estimate_criterion)
-            return member_dens[idx][None, :, :]  # [1, N, G]
-        
-        elif strategy == 'posterior_weighted':
-            # Return individual member densities (unaveraged)
-            return member_dens  # [M, N, G]
-        
-        else:
-            raise ValueError(f"Unknown strategy: {strategy}")
+        member_dens = np.stack(member_dens, axis=0)
+
+        if strategy == 'posterior_predictive':
+            return np.mean(member_dens, axis=0)
+        if strategy == 'bma':
+            return member_dens
+        raise NotImplementedError(
+            f"inferential_choice '{strategy}' is not implemented for {self.__class__.__name__}."
+        )
+
+    def get_second_order_distribution(self, X, y_grid, context='predict'):
+        """Provide second-order distribution payload for uncertainty measures."""
+        strategy = self.resolve_inferential_choice(context=context)
+        if strategy == 'posterior_predictive':
+            dens = self.predict_density(X, y_grid, context=context)
+            return {'densities': dens[None, ...], 'weights': np.array([1.0])}
+
+        member_dens = self.predict_density(X, y_grid, context=context)
+        n = member_dens.shape[0]
+        return {'densities': member_dens, 'weights': np.ones(n) / max(n, 1)}
 
     def get_member_parameters(self):
         """Return member indices as 'parameter samples' for integrated volume."""

@@ -17,8 +17,12 @@ class DifferentialEntropy(UncertaintyBase):
     The approximate context represents the true data generating process with point-estimate
     parameters (minimal epistemic uncertainty), while predict includes parameter uncertainty.
     
-    Requires model.predict_density_samples(X, y_grid, context='predict'|'approximate', n_samples)
-    to return [S,N,G] densities. Falls back to deterministic density if unavailable.
+    Uses model.predict_density(X, y_grid, context='predict'|'approximate') that returns
+    either [N,G] (single density) or [S,N,G] (many densities).
+
+    Aggregation semantics:
+    - single density: score is computed directly on that density
+    - many densities: score is computed per density then averaged over S
     """
     def __init__(self, base=np.e, decomposition='total', grid_points=512, y_pad=1.0, n_param_samples=20):
     # def __init__(self, base=np.e, decomposition='total', grid_points=10000, y_pad=1.0, n_param_samples=20):
@@ -100,46 +104,20 @@ class DifferentialEntropy(UncertaintyBase):
 
     def _compute_total(self, model, X):
         y_grid = model.default_y_grid(X, grid_points=self.grid_points, y_pad=self.y_pad)
-        try:
-            dens_pred = model.predict_density_samples(
-                X, y_grid, context='predict', n_samples=self.n_param_samples
-            )
-            if dens_pred.ndim != 3:
-                raise ValueError("predict_density_samples must return [S,N,G]")
-            dens_pred_mix = self._normalize_last_axis(dens_pred.mean(axis=0), y_grid)
-            return self._entropy_from_density(dens_pred_mix, y_grid, self.base)
-        except Exception:
-            dens_pred = model.predict_density(X, y_grid, context='predict')
-            return self._entropy_from_density(dens_pred, y_grid, self.base)
+        dens_pred = self._predict_density_collection(model, X, y_grid, context='predict')
+        H_pred = self._entropy_from_density(dens_pred, y_grid, self.base)
+        return H_pred.mean(axis=0)
 
     def _compute_aleatoric(self, model, X):
         y_grid = model.default_y_grid(X, grid_points=self.grid_points, y_pad=self.y_pad)
-        try:
-            dens_approx = model.predict_density_samples(
-                X, y_grid, context='approximate', n_samples=self.n_param_samples
-            )
-            if dens_approx.ndim != 3:
-                raise ValueError("predict_density_samples must return [S,N,G]")
-            H_approx = self._entropy_from_density(dens_approx, y_grid, self.base)
-            return H_approx.mean(axis=0)
-        except Exception:
-            dens_approx = model.predict_density(X, y_grid, context='approximate')
-            return self._entropy_from_density(dens_approx, y_grid, self.base)
+        dens_approx = self._predict_density_collection(model, X, y_grid, context='approximate')
+        H_approx = self._entropy_from_density(dens_approx, y_grid, self.base)
+        return H_approx.mean(axis=0)
 
     def _compute_epistemic(self, model, X):
         y_grid = model.default_y_grid(X, grid_points=self.grid_points, y_pad=self.y_pad)
-        try:
-            dens_pred = model.predict_density_samples(
-                X, y_grid, context='predict', n_samples=self.n_param_samples
-            )
-            dens_approx = model.predict_density_samples(
-                X, y_grid, context='approximate', n_samples=self.n_param_samples
-            )
-            if dens_pred.ndim != 3 or dens_approx.ndim != 3:
-                raise ValueError("predict_density_samples must return [S,N,G]")
-        except Exception:
-            dens_pred = model.predict_density(X, y_grid, context='predict')[None, :, :]
-            dens_approx = model.predict_density(X, y_grid, context='approximate')[None, :, :]
+        dens_pred = self._predict_density_collection(model, X, y_grid, context='predict')
+        dens_approx = self._predict_density_collection(model, X, y_grid, context='approximate')
 
         S_pred = dens_pred.shape[0]
         S_approx = dens_approx.shape[0]
