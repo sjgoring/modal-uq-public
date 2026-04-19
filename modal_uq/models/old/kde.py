@@ -8,8 +8,8 @@ from conditional_kde import ConditionalGaussianKernelDensity
 
 @register('model','kde')
 class ConditionalKDEModel(ModelBase):
-    def __init__(self, bandwidth=0.5, kernel='gaussian', marginalization=None):
-        super().__init__(marginalization=marginalization)
+    def __init__(self, bandwidth=0.5, kernel='gaussian', inferential_choice=None):
+        super().__init__(inferential_choice=inferential_choice)
         self.bandwidth = bandwidth; self.kernel = kernel
         self._y_min = None; self._y_max = None
         self._kde = ConditionalGaussianKernelDensity(

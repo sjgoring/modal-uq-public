@@ -1,13 +1,13 @@
 
 import numpy as np
-from .base import ModelBase, MarginalizationConfig
+from .base import ModelBase, InferentialChoiceConfig
 from ..registry import register
 
 # @register('model','mdn_mc_dropout')
 class MDN_MCDropout(ModelBase):
     def __init__(self, input_dim=None, hidden_sizes=(64,64), dropout_p=0.1,
-                 num_components=5, lr=1e-3, epochs=200, batch_size=128, marginalization=None):
-        super().__init__(marginalization=marginalization)
+                 num_components=5, lr=1e-3, epochs=200, batch_size=128, inferential_choice=None):
+        super().__init__(inferential_choice=inferential_choice)
         self.input_dim = input_dim
         self.hidden_sizes = hidden_sizes
         self.dropout_p = dropout_p
@@ -127,7 +127,7 @@ class MDN_MCDropout(ModelBase):
 
 
     def predict_density(self, X, y_grid, context='predict'):
-        """Predict density using specified marginalization context.
+        """Predict density using specified inferential_choice context.
         
         Parameters
         ----------
@@ -136,14 +136,14 @@ class MDN_MCDropout(ModelBase):
         y_grid : array
             Output grid
         context : {'predict', 'approximate'}, default='predict'
-            Marginalization context
+            inferential_choice context
             
         Returns
         -------
         dens : array of shape [N, G]
             Predicted density
         """
-        config = self.get_marginalization_config()
+        config = self.get_inferential_choice_config()
         
         # Select which strategy to use based on context
         strategy = config.predict if context == 'predict' else config.approximate
@@ -190,7 +190,7 @@ class MDN_MCDropout(ModelBase):
         y_grid : array
             Output grid
         context : {'predict', 'approximate'}, default='predict'
-            Marginalization context
+            inferential_choice context
         n_samples : int
             Number of dropout samples to draw
             
@@ -199,7 +199,7 @@ class MDN_MCDropout(ModelBase):
         dens : array of shape [S, N, G]
             Sampled densities
         """
-        config = self.get_marginalization_config()
+        config = self.get_inferential_choice_config()
         
         # Select which strategy to use based on context
         strategy = config.predict if context == 'predict' else config.approximate

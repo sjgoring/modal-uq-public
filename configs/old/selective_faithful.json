@@ -35,7 +35,7 @@
       "n_mc_samples": 20,
       "n_epochs": 200,
       "batch_size": 32,
-      "marginalization": {
+      "inferential_choice": {
       "predict": "bma_expected",         
       "approximate": "point_estimate",   
       "point_estimate_criterion": "mean" 
@@ -45,7 +45,7 @@
   "uncertainty": {
   "measures": [
     { "name": "differential_entropy", "params": { "decomposition": "total",     "label": "differential_entropy_total" } },
-    { "name": "quest", "params": { "decomposition": "total",     "label": "quest_total_10%" , "alpha":0.32} },
+    { "name": "alpha_volume", "params": { "decomposition": "total",     "label": "alpha_volume_total_10%" , "alpha":0.32} },
     { "name": "variance", "params": { "decomposition": "total",     "label": "variance_total" } }
   ]
 },

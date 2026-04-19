@@ -1,18 +1,19 @@
 import numpy as np
 from .base import UncertaintyBase
 from ..registry import register
-from scipy.stats import gaussian_kde
 import scipy.integrate as integrate
 
-@register('uncertainty','quest')
+@register('uncertainty','alpha_volume')
 class QUESTUncertainty(UncertaintyBase):
     """
     QUEST uncertainty using Highest Density Regions (HDR).
     
-    Computes the Lebesgue measure (total length) of the highest density region
+    Computes either alpha volume or intergrated volume .
+    Alpha volume - the Lebesgue measure (total length) of the highest density region
     containing (1 - alpha) probability mass.
+    Integrated volume - curve of alpha volume against alpha, integrated over alpha in (0,1).
     
-    Uses dual marginalization contexts for uncertainty decomposition:
+    Uses dual inferential_choice contexts for uncertainty decomposition:
     - total:      Lebesgue measure of HDR from predict context
     - aleatoric:  Lebesgue measure of HDR from approximate context (true DGP)
     - epistemic:  TBD - HDR-based measure does not naturally decompose via subtraction
@@ -133,77 +134,72 @@ class QUESTUncertainty(UncertaintyBase):
 
         return threshold, mask
     
-    def score(self, model, X, y_true=None):
-        """Compute QUEST uncertainty using predict and approximate contexts.
-        
-        Returns Lebesgue measure of the HDR. Decomposition:
-        - aleatoric: HDR measure from approximate context
-        - total: HDR measure from predict context
-        - epistemic: NotImplementedError (TBD - domain-specific analysis needed)
-        """
+    def _compute_total(self, model, X):
         y_grid = model.default_y_grid(X, grid_points=self.grid_points, y_pad=self.y_pad)
         
         try:
-            # Sample densities from both contexts
             dens_pred = model.predict_density_samples(X, y_grid, context='predict', n_samples=self.n_param_samples)   # [S,N,G]
-            dens_approx = model.predict_density_samples(X, y_grid, context='approximate', n_samples=self.n_param_samples)   # [S,N,G]
-            
-            # Compute HDR from both contexts
             threshold_pred, mask_pred = self._hdr_from_density(dens_pred, y_grid, self.alpha)
-            threshold_approx, mask_approx = self._hdr_from_density(dens_approx, y_grid, self.alpha)
-            
-            print("quest.py - score() - test prints")
-            print(dens_pred.shape, mask_pred.shape)
-            print(dens_pred[:1,:5,:5], mask_pred[:1,:5,:5])
-
-            # Compute Lebesgue measures
             lebesgue_pred = self._lebesgue_measure_hdr(mask_pred, y_grid)   # [N]
-            lebesgue_approx = self._lebesgue_measure_hdr(mask_approx, y_grid)  # [N]
-            
-            aleatoric = lebesgue_approx
-            total = lebesgue_pred
+            return lebesgue_pred
             
         except Exception:
             # Deterministic fallback
             dens_pred = model.predict_density(X, y_grid, context='predict')
-            dens_approx = model.predict_density(X, y_grid, context='approximate')
-            
             threshold_pred, mask_pred = self._hdr_from_density(dens_pred, y_grid, self.alpha)
-            threshold_approx, mask_approx = self._hdr_from_density(dens_approx, y_grid, self.alpha)
-            
             lebesgue_pred = self._lebesgue_measure_hdr(mask_pred, y_grid)
-            lebesgue_approx = self._lebesgue_measure_hdr(mask_approx, y_grid)
-            
-            aleatoric = lebesgue_approx
-            total = lebesgue_pred
-        
-        # Return depending on decomposition
-        if self.decomposition == 'epistemic':
-            # Compute meta-QUEST on the parameter posterior as epistemic uncertainty.
-            # meta_quest operates on parameter samples (KDE-imputed posterior) and
-            # returns a scalar. We return this scalar repeated for each input in X
-            # so the shape matches other uncertainty measures ([N], one value per X).
-            n_samples = self.n_param_samples
-            quest_scores = []
-            for x in X:
-                param_samples = model.sample_full_network_parameters(n_samples)
-                mdn_param_samples = []
-                for param_sample in param_samples:
-                    mdn_params = model.mdn_params_for_input_full(x, param_sample)
-                    mdn_param_samples.append(mdn_params.flatten())
-                mdn_param_samples = np.array(mdn_param_samples)
-                quest_val = self.meta_quest_from_parameter_samples(mdn_param_samples, model=model)
-                quest_scores.append(quest_val)
-            return np.array(quest_scores)
-            
-        elif self.decomposition == 'aleatoric':
-            return aleatoric
-        else:  # total
-            return total
+            return lebesgue_pred
 
-    def meta_quest_from_parameter_samples(self, theta_samples, model=None, n_alpha=100):
+    def _compute_aleatoric(self, model, X):
+        y_grid = model.default_y_grid(X, grid_points=self.grid_points, y_pad=self.y_pad)
+        try:
+            dens_approx = model.predict_density_samples(X, y_grid, context='approximate', n_samples=self.n_param_samples)
+            threshold_approx, mask_approx = self._hdr_from_density(dens_approx, y_grid, self.alpha)
+            lebesgue_approx = self._lebesgue_measure_hdr(mask_approx, y_grid)
+            return lebesgue_approx
+        except Exception:
+            dens_approx = model.predict_density(X, y_grid, context='approximate')
+            threshold_approx, mask_approx = self._hdr_from_density(dens_approx, y_grid, self.alpha)
+            lebesgue_approx = self._lebesgue_measure_hdr(mask_approx, y_grid)
+            return lebesgue_approx
+
+    def _compute_epistemic(self, model, X):
+        # Integrated volume on parameter posterior per input.
+        n_samples = self.n_param_samples
+        alpha_volume_scores = []
+        for x in X:
+            param_samples = model.sample_full_network_parameters(n_samples)
+            mdn_param_samples = []
+            for param_sample in param_samples:
+                mdn_params = model.mdn_params_for_input_full(x, param_sample)
+                mdn_param_samples.append(mdn_params.flatten())
+            mdn_param_samples = np.array(mdn_param_samples)
+            alpha_volume_val = self.integrated_volume_from_parameter_samples(mdn_param_samples, model=model)
+            alpha_volume_scores.append(alpha_volume_val)
+        return np.array(alpha_volume_scores)
+
+    def score_total(self, model, X, y_true=None):
+        return self._compute_total(model, X)
+
+    def score_aleatoric(self, model, X, y_true=None):
+        return self._compute_aleatoric(model, X)
+
+    def score_epistemic(self, model, X, y_true=None):
+        return self._compute_epistemic(model, X)
+
+    def score(self, model, X, y_true=None):
+        """Dispatch to total/aleatoric/epistemic score by decomposition."""
+        if self.decomposition == 'total':
+            return self.score_total(model, X, y_true=y_true)
+        if self.decomposition == 'aleatoric':
+            return self.score_aleatoric(model, X, y_true=y_true)
+        if self.decomposition == 'epistemic':
+            return self.score_epistemic(model, X, y_true=y_true)
+        raise ValueError(f"Unknown decomposition: {self.decomposition}")
+
+    def integrated_volume_from_parameter_samples(self, theta_samples, model=None, n_alpha=100):
         """
-        Compute meta-QUEST as the area under the curve of QUEST(alpha) for alpha in (0,1).
+        Compute integrated volume as the area under the curve of alpha_volume(alpha) for alpha in (0,1).
         """
         theta = np.asarray(theta_samples)
         if theta.ndim != 2:
@@ -215,7 +211,7 @@ class QUESTUncertainty(UncertaintyBase):
         idx = np.argsort(-density)
         density_sorted = density[idx]
         dv = np.ones_like(density_sorted) / len(density_sorted)
-        quest_curve = []
+        alpha_volume_curve = []
         alpha_grid = np.linspace(0, 1, n_alpha)
         for alpha in alpha_grid:
             target = 1.0 - alpha
@@ -223,18 +219,18 @@ class QUESTUncertainty(UncertaintyBase):
             threshold = density_sorted[idx_thresh]
             mask = density >= threshold
             lebesgue_measure = np.sum(mask * dv)
-            quest_curve.append(lebesgue_measure)
-        meta = integrate.trapezoid(quest_curve, alpha_grid)
+            alpha_volume_curve.append(lebesgue_measure)
+        meta = integrate.trapezoid(alpha_volume_curve, alpha_grid)
         return float(np.maximum(meta, 0.0))
 
-    def meta_quest(self, model=None, theta_samples=None, n_param_samples=None):
+    def integrated_volume(self, model=None, theta_samples=None, n_param_samples=None):
         """
-        Compute meta-QUEST using parameter samples.
+        Compute integrated volume using parameter samples.
         """
         if theta_samples is None:
             if model is None:
                 raise ValueError("Provide either `model` or `theta_samples`.")
             n = n_param_samples or self.n_param_samples
             # For input-dependent, call from score for each input
-            raise NotImplementedError("Call meta_quest_from_parameter_samples for each input in score.")
-        return self.meta_quest_from_parameter_samples(theta_samples, model)
+            raise NotImplementedError("Call integrated_volume_from_parameter_samples for each input in score.")
+        return self.integrated_volume_from_parameter_samples(theta_samples, model)

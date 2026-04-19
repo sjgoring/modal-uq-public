@@ -28,7 +28,7 @@
     "lr" : 1e-5,
     "weight_decay" : 1e-4
   },
-    "marginalization": {
+    "inferential_choice": {
       "predict": "bma_expected",         
       "approximate": "point_estimate",   
       "point_estimate_criterion": "mle" 
@@ -38,10 +38,10 @@
   "measures": [
     { "name": "differential_entropy", "params": { "decomposition": "total",     "label": "differential_entropy_total" } },
     { "name": "variance", "params": { "decomposition": "total",     "label": "variance_total" } },
-    { "name": "quest", "params": { "decomposition": "total",     "label": "quest_total_1%" , "alpha":0.01} },
-    { "name": "quest", "params": { "decomposition": "total",     "label": "quest_total_5%" , "alpha":0.05} },
-    { "name": "quest", "params": { "decomposition": "total",     "label": "quest_total_10%" , "alpha":0.10} },
-    { "name": "quest", "params": { "decomposition": "total",     "label": "quest_total_32%" , "alpha":0.32} }
+    { "name": "alpha_volume", "params": { "decomposition": "total",     "label": "alpha_volume_total_1%" , "alpha":0.01} },
+    { "name": "alpha_volume", "params": { "decomposition": "total",     "label": "alpha_volume_total_5%" , "alpha":0.05} },
+    { "name": "alpha_volume", "params": { "decomposition": "total",     "label": "alpha_volume_total_10%" , "alpha":0.10} },
+    { "name": "alpha_volume", "params": { "decomposition": "total",     "label": "alpha_volume_total_32%" , "alpha":0.32} }
   ]
 },
   "correlation": {

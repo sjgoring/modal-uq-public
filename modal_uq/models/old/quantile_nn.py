@@ -5,8 +5,8 @@ from ..registry import register
 
 @register('model','quantile_nn')
 class QuantileNN(ModelBase):
-    def __init__(self, quantiles=(0.1,0.5,0.9), hidden_sizes=(128,128), lr=1e-3, epochs=200, batch_size=128, marginalization=None):
-        super().__init__(marginalization=marginalization)
+    def __init__(self, quantiles=(0.1,0.5,0.9), hidden_sizes=(128,128), lr=1e-3, epochs=200, batch_size=128, inferential_choice=None):
+        super().__init__(inferential_choice=inferential_choice)
         self.quantiles = list(quantiles)
         self.hidden_sizes = hidden_sizes
         self.lr = lr; self.epochs = epochs; self.batch_size = batch_size

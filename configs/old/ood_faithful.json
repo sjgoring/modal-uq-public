@@ -40,7 +40,7 @@
       },
       "n_members": 5,
       "bootstrap": true,
-      "marginalization": {
+      "inferential_choice": {
         "predict": "bma_expected",
         "approximate": "point_estimate",
         "point_estimate_criterion": "mle"

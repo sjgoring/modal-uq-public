@@ -38,8 +38,8 @@ def likelihood_ratio_measure(y_true, y_mode_pred, kwargs_dict):
     print("Debug - Checking y_true and y_mode_pred against argmax of true_dens and est_dens respectively.")
     print("true_dens correct", np.equal(y_true, y_grid[true_dens.argmax(axis=1)]))
     print("est_dens correct", np.equal(y_mode_pred, y_grid[est_dens.argmax(axis=1)]))
-    
-    quit()
+    print("Todo: Complete this debugging.")
+    # quit()
     # normalise incoming densities as empirical probabilities
     true_dens = true_dens / (true_dens.sum(axis=1)[:, None] + 1e-12)
     est_dens = est_dens / (est_dens.sum(axis=1)[:, None] + 1e-12)

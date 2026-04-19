@@ -10,8 +10,8 @@ from .base import ModelBase
 
 class BNNModel(ModelBase):
     """BNN Regression model wrapper."""
-    def __init__(self, marginalization=None, seed_bnn=0, dtype=float32):
-        super().__init__(marginalization)
+    def __init__(self, inferential_choice=None, seed_bnn=0, dtype=float32):
+        super().__init__(inferential_choice)
         self.bnn = None # Placeholder, other models can be initialised before data provided. BNN cannot.
         self.seed_bnn = seed_bnn
         self.dtype = dtype

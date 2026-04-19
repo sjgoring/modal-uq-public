@@ -2,7 +2,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from .base import ModelBase, MarginalizationConfig
+from .base import ModelBase, InferentialChoiceConfig
 from ..registry import register
 
 @register('model','bnn_vi')
@@ -11,13 +11,13 @@ class BayesianNNVI(ModelBase):
     Bayesian Neural Network with Variational Inference.
     Mixture Density Network output: predicts GMM parameters (means, variances, weights).
     Supports GPU acceleration and learns multi-modal distribution via mixture components.
-    Implements flexible marginalization strategies for prediction and ground truth approximation.
+    Implements flexible inferential_choice strategies for prediction and ground truth approximation.
     """
     def __init__(self, input_dim=None, hidden_dims=[64, 64], n_components=3,
                  prior_sigma=1.0, n_mc_samples=20,
                  learning_rate=1e-3, n_epochs=100, batch_size=32, seed=42,
-                 marginalization=None, device=None):
-        super().__init__(marginalization=marginalization)
+                 inferential_choice=None, device=None):
+        super().__init__(inferential_choice=inferential_choice)
         self.input_dim = input_dim
         self.hidden_dims = hidden_dims
         self.n_components = n_components
@@ -27,7 +27,7 @@ class BayesianNNVI(ModelBase):
         self.n_epochs = n_epochs
         self.batch_size = batch_size
         self.seed = seed
-        self.marginalization = marginalization
+        self.inferential_choice = inferential_choice
         if device is None:
             self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         else:
@@ -114,16 +114,16 @@ class BayesianNNVI(ModelBase):
         kl_scaled = kl / N
         return nll + kl_scaled
 
-    def get_marginalization_config(self):
-        if hasattr(self, 'marginalization') and self.marginalization is not None:
-            return self.marginalization
-        return MarginalizationConfig()
+    def get_inferential_choice_config(self):
+        if hasattr(self, 'inferential_choice') and self.inferential_choice is not None:
+            return self.inferential_choice
+        return InferentialChoiceConfig()
 
     def predict_density(self, X, y_grid, context='predict'):
         """
-        Predict the density over y_grid for each X, using the marginalization strategy.
+        Predict the density over y_grid for each X, using the inferential_choice strategy.
         """
-        config = self.get_marginalization_config()
+        config = self.get_inferential_choice_config()
         strategy = getattr(config, context, 'bma_expected')
         if strategy == 'bma_expected':
             samples = []
@@ -141,7 +141,7 @@ class BayesianNNVI(ModelBase):
                 samples.append(dens)
             return np.mean(np.stack(samples, axis=0), axis=0)
         else:
-            raise ValueError(f"Unknown marginalization strategy: {strategy}")
+            raise ValueError(f"Unknown inferential_choice strategy: {strategy}")
 
     def _predict_density_single(self, X, y_grid, sample=True):
         X = np.asarray(X, dtype=np.float32)
@@ -176,7 +176,7 @@ class BayesianNNVI(ModelBase):
         return mixture_dens.cpu().numpy()
 
     def predict_density_samples(self, X, y_grid, context='predict', n_samples=None):
-        config = self.get_marginalization_config()
+        config = self.get_inferential_choice_config()
         strategy = getattr(config, context, 'bma_expected')
         if n_samples is None:
             n_samples = self.n_mc_samples

@@ -5,8 +5,8 @@ from .base import ModelBase
 
 class GaussianProcessModel(ModelBase):
     """Gaussian Process Regression model wrapper."""
-    def __init__(self, kernel=None, marginalization=None):
-        super().__init__(marginalization)
+    def __init__(self, kernel=None, inferential_choice=None):
+        super().__init__(inferential_choice)
         if kernel is None:
             kernel = C(1.0, (1e-4, 1e6)) * RBF(1.0, (1e-6, 1e3))
         self.gp = GaussianProcessRegressor(kernel=kernel, n_restarts_optimizer=5)

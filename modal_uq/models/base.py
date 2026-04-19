@@ -4,16 +4,16 @@ import numpy as np
 import scipy.integrate as integrate
 
 
-class MarginalizationConfig:
-    """Configuration for marginalization strategies in stochastic models.
+class InferentialChoiceConfig:
+    """Configuration for inferential_choice strategies in stochastic models.
     
     Parameters
     ----------
     predict : str
-        Marginalization strategy for prediction: 'bma_expected', 'posterior_weighted', 
+        inferential_choice strategy for prediction: 'bma_expected', 'posterior_weighted', 
         or 'point_estimate'. Includes epistemic uncertainty.
     approximate : str
-        Marginalization strategy for approximating true DGP: 'point_estimate', 
+        inferential_choice strategy for approximating true DGP: 'point_estimate', 
         'bma_expected', or 'posterior_weighted'. Usually point_estimate.
     point_estimate_criterion : str
         Criterion for selecting parameters when strategy is 'point_estimate':
@@ -50,7 +50,7 @@ class MarginalizationConfig:
             
         Returns
         -------
-        MarginalizationConfig
+        InferentialChoiceConfig
         """
         if config_dict is None:
             return cls()
@@ -59,7 +59,7 @@ class MarginalizationConfig:
         return cls(**config_dict)
     
     def __repr__(self):
-        return (f"MarginalizationConfig(predict='{self.predict}', "
+        return (f"InferentialChoiceConfig(predict='{self.predict}', "
                 f"approximate='{self.approximate}', "
                 f"point_estimate_criterion='{self.point_estimate_criterion}')")
 
@@ -70,21 +70,21 @@ class ModelBase(ABC):
     Optional stochastic extensions:
       - predict_density_samples: return multiple parameter-sampled densities [S,N,G]
       - predict_mixture_params: return deterministic mixture params (for MDN)
-      - marginalization: configuration for dual marginalization contexts (predict vs. approximate)
+      - inferential_choice: configuration for dual inferential_choice contexts (predict vs. approximate)
     
     Parameters
     ----------
-    marginalization : dict or MarginalizationConfig, optional
-        Marginalization strategy configuration. Converted to MarginalizationConfig.
+    inferential_choice : dict or InferentialChoiceConfig, optional
+        inferential_choice strategy configuration. Converted to InferentialChoiceConfig.
         Only used by stochastic models.
     """
     
-    def __init__(self, marginalization=None):
-        self._marginalization_config = MarginalizationConfig.from_dict(marginalization)
+    def __init__(self, inferential_choice=None):
+        self._inferential_choice_config = InferentialChoiceConfig.from_dict(inferential_choice)
     
-    def get_marginalization_config(self):
-        """Get the marginalization configuration for this model."""
-        return self._marginalization_config
+    def get_inferential_choice_config(self):
+        """Get the inferential_choice configuration for this model."""
+        return self._inferential_choice_config
     
     @abstractmethod
     def fit(self, X, y, X_val=None, y_val=None): ...
@@ -116,7 +116,7 @@ class ModelBase(ABC):
         y_grid : array
             Output grid
         context : {'predict', 'approximate'}, default='predict'
-            Marginalization context:
+            inferential_choice context:
             - 'predict': Include epistemic uncertainty (marginalize over parameters)
             - 'approximate': Best guess of true DGP (point estimate of parameters)
         n_samples : int

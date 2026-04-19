@@ -9,8 +9,8 @@ class MixtureDensityModel(ModelBase):
     """Mixture Density network model wrapper.
         kwargs are passed to the underlying MixtureDensityEstimator from scikit-mdn.
     """
-    def __init__(self, marginalization=None, **kwargs):
-        super().__init__(marginalization)
+    def __init__(self, inferential_choice=None, **kwargs):
+        super().__init__(inferential_choice)
         self.mdn = MixtureDensityEstimator(**kwargs)
         self._y_min = None
         self._y_max = None

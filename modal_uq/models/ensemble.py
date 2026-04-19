@@ -1,12 +1,12 @@
 
 import numpy as np
-from .base import ModelBase, MarginalizationConfig
+from .base import ModelBase, InferentialChoiceConfig
 from ..registry import register, build
 
 @register('model','ensemble')
 class Ensemble(ModelBase):
-    def __init__(self, base_model='mdn', base_params=None, n_members=5, bootstrap=True, seed=42, marginalization=None):
-        super().__init__(marginalization=marginalization)
+    def __init__(self, base_model='mdn', base_params=None, n_members=5, bootstrap=True, seed=42, inferential_choice=None):
+        super().__init__(inferential_choice=inferential_choice)
         self.base_model = base_model
         self.base_params = base_params or {}
         self.n_members = n_members
@@ -80,7 +80,7 @@ class Ensemble(ModelBase):
             raise ValueError(f"Unknown criterion: {criterion}")
     
     def predict_density(self, X, y_grid, context='predict'):
-        """Predict density using specified marginalization context.
+        """Predict density using specified inferential_choice context.
         
         Parameters
         ----------
@@ -89,14 +89,14 @@ class Ensemble(ModelBase):
         y_grid : array
             Output grid
         context : {'predict', 'approximate'}, default='predict'
-            Marginalization context
+            inferential_choice context
             
         Returns
         -------
         dens : array of shape [N, G]
             Predicted density
         """
-        config = self.get_marginalization_config()
+        config = self.get_inferential_choice_config()
         
         # Select which strategy to use based on context
         strategy = config.predict if context == 'predict' else config.approximate
@@ -135,7 +135,7 @@ class Ensemble(ModelBase):
         y_grid : array
             Output grid
         context : {'predict', 'approximate'}, default='predict'
-            Marginalization context
+            inferential_choice context
         n_samples : int, optional
             Ignored; ensemble has fixed number of members
             
@@ -144,7 +144,7 @@ class Ensemble(ModelBase):
         dens : array of shape [S, N, G]
             Sampled densities where S is number of members
         """
-        config = self.get_marginalization_config()
+        config = self.get_inferential_choice_config()
         
         # Select which strategy to use based on context
         strategy = config.predict if context == 'predict' else config.approximate
@@ -171,5 +171,5 @@ class Ensemble(ModelBase):
             raise ValueError(f"Unknown strategy: {strategy}")
 
     def get_member_parameters(self):
-        """Return member indices as 'parameter samples' for meta-QUEST."""
+        """Return member indices as 'parameter samples' for integrated volume."""
         return np.arange(len(self.members)).reshape(-1, 1)

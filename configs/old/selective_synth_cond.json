@@ -29,7 +29,7 @@
       "weight_decay": 1e-2,
       "epochs": 1000
   },
-    "marginalization": {
+    "inferential_choice": {
       "predict": "bma_expected",         
       "approximate": "point_estimate",   
       "point_estimate_criterion": "mle" 
@@ -39,8 +39,8 @@
   "measures": [
     { "name": "differential_entropy", "params": { "decomposition": "total",     "label": "differential_entropy_total" } },
     { "name": "differential_entropy", "params": { "decomposition": "aleatoric",     "label": "differential_aleatoric_total" } },
-    { "name": "quest", "params": { "decomposition": "total",     "label": "quest_total_32%" , "alpha":0.32} },
-    { "name": "quest", "params": { "decomposition": "aleatoric",     "label": "quest_aleatoric_32%" , "alpha":0.32} },
+    { "name": "alpha_volume", "params": { "decomposition": "total",     "label": "alpha_volume_total_32%" , "alpha":0.32} },
+    { "name": "alpha_volume", "params": { "decomposition": "aleatoric",     "label": "alpha_volume_aleatoric_32%" , "alpha":0.32} },
     { "name": "variance", "params": { "decomposition": "total",     "label": "variance_total" } },
     { "name": "variance", "params": { "decomposition": "aleatoric",     "label": "variance_aleatoric" } }
   ]

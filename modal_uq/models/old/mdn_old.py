@@ -5,8 +5,8 @@ from ..registry import register
 
 # @register('model','mdn')
 class MDN(ModelBase):
-    def __init__(self, input_dim=None, hidden_sizes=(64,64), num_components=5, lr=1e-3, epochs=200, batch_size=128, marginalization=None):
-        super().__init__(marginalization=marginalization)
+    def __init__(self, input_dim=None, hidden_sizes=(64,64), num_components=5, lr=1e-3, epochs=200, batch_size=128, inferential_choice=None):
+        super().__init__(inferential_choice=inferential_choice)
         self.input_dim = input_dim
         self.hidden_sizes = hidden_sizes
         self.num_components = num_components
@@ -81,5 +81,5 @@ class MDN(ModelBase):
         return pi, mu, sigma2
     
     def get_member_parameters(self):
-        """Return member indices as 'parameter samples' for meta-QUEST."""
+        """Return member indices as 'parameter samples' for integrated volume."""
         return np.arange(len(self.members)).reshape(-1, 1)

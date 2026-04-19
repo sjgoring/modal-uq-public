@@ -28,7 +28,7 @@
     "lr" : 1e-5,
     "weight_decay" : 1e-4
   },
-    "marginalization": {
+    "inferential_choice": {
       "predict": "bma_expected",         
       "approximate": "point_estimate",   
       "point_estimate_criterion": "mle" 
@@ -36,7 +36,7 @@
   },
   "uncertainty": {
   "measures": [
-    { "name": "quest", "params": { "decomposition": "total",     "label": "quest_total_32%" , "alpha":0.32} }
+    { "name": "alpha_volume", "params": { "decomposition": "total",     "label": "alpha_volume_total_32%" , "alpha":0.32} }
   ]
 },
   "correlation": {
