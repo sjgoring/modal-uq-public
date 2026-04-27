@@ -103,8 +103,10 @@ class Ensemble(ModelBase):
         member_dens = np.stack(member_dens, axis=0)
 
         if strategy == 'posterior_predictive':
+            # For posterior predictive, we weight members by their posterior probabilities. As this is a simple ensemble without explicit Bayesian updating, we can use uniform weights or weights based on member performance. Here, we use uniform weights for simplicity.
             return np.mean(member_dens, axis=0)
         if strategy == 'bma':
+            # Pass full densities to functions that can handle them. Example usage: uncertainty measures will be calculated per member and then averaged.
             return member_dens
         raise NotImplementedError(
             f"inferential_choice '{strategy}' is not implemented for {self.__class__.__name__}."
@@ -112,6 +114,17 @@ class Ensemble(ModelBase):
 
     def get_second_order_distribution(self, X, y_grid, context='predict'):
         """Provide second-order distribution payload for uncertainty measures."""
+        # Note that here we fit a density to the otherwise dirac mixture. Note this is only intended to be used for epistemic uncertainty measurement.
+        for member in self.members:
+            # Does the model have a get_params method?
+            if hasattr(member, 'get_params'):
+                params = member.get_params()
+            else:
+                raise NotImplementedError(
+                    f"Model {member.__class__.__name__} does not have a get_params method for empirical second-order distribution creation in {self.__class__.__name__}
+        
+        
+        
         strategy = self.resolve_inferential_choice(context=context)
         if strategy == 'posterior_predictive':
             dens = self.predict_density(X, y_grid, context=context)
