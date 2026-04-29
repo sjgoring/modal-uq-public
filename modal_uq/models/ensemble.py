@@ -28,7 +28,12 @@ class Ensemble(ModelBase):
                 X_m, y_m = X[idx], y[idx]
             else:
                 X_m, y_m = X, y
-            model.fit(X_m, y_m, X_val, y_val)
+            if self.base_model == 'mdn':
+                model.fit(X_m, y_m, X_val, y_val)
+            elif self.base_model == 'condgmm':
+                model.fit(X_m, y_m)
+            else:
+                raise NotImplementedError(f"Base model '{self.base_model}' is not supported in Ensemble.")
             self.members.append(model)
         self._y_min = float(y.min()); self._y_max = float(y.max())
         
@@ -112,27 +117,91 @@ class Ensemble(ModelBase):
             f"inferential_choice '{strategy}' is not implemented for {self.__class__.__name__}."
         )
 
-    def get_second_order_distribution(self, X, y_grid, context='predict'):
-        """Provide second-order distribution payload for uncertainty measures."""
-        # Note that here we fit a density to the otherwise dirac mixture. Note this is only intended to be used for epistemic uncertainty measurement.
+    def default_theta_grid(self, X, num_points=100):
+        """Default grid for second-order distribution over parameters."""
+        # Note, num_points is per dim.
+        # For simplicity, we create a grid over the range of member parameters. This is a placeholder and can be improved with more sophisticated methods.
+        if self._y_min is None or self._y_max is None:
+            raise ValueError("Model must be fitted before creating default theta grid.")
+        
+        # check all members, for each parameter obtain the min and max.
+        param_mins = []
+        param_maxs = []
         for member in self.members:
-            # Does the model have a get_params method?
             if hasattr(member, 'get_params'):
-                params = member.get_params()
+                params = member.get_params(X)  # [n_params, n_X]
+                param_mins.append(params.min(axis=1))
+                param_maxs.append(params.max(axis=1))
+                
+                print(params[:params.shape[0]//3,:].sum(axis=0), np.ones(params.shape[1]))
+                if not np.isclose(params[:params.shape[0]//3,:].sum(axis=0), np.ones(params.shape[1]), atol=1e-5).all():  
+                    raise ValueError("First third of parameters are expected to be weights that sum to 1. Check get_params output.")
+                # else:
+                #     print("Weight parameters check passed: first third of parameters sum to 1 across members.")
+                #     quit()
             else:
                 raise NotImplementedError(
-                    f"Model {member.__class__.__name__} does not have a get_params method for empirical second-order distribution creation in {self.__class__.__name__}
+                    f"Members of {self.__class__.__name__} do not implement get_params, so default theta grid cannot be created."
+                )
+        param_mins = np.stack(param_mins, axis=0)  # [n_members, n_params]
+        param_maxs = np.stack(param_maxs, axis=0)  # [n_members, n_params]
+        overall_mins = param_mins.min(axis=0)  # [n_params]
+        overall_maxs = param_maxs.max(axis=0)  # [n_params]
+        # Create a grid for each parameter, with broad padding
+        grids = []
+        for min_val, max_val in zip(overall_mins, overall_maxs):
+            pad = 0.1 * (max_val - min_val + 1e-6)
+            grid = np.linspace(min_val - pad, max_val + pad, num_points)
+            grids.append(grid)
+        # Returns a grid of shape [n_params, num_points]
+        # Drop first param (e.g. weights) as it is redundant, to avoid rank degeneracy in KDE.
+        # Check performed above to ensure first n_members params are weights that sum to 1, so dropping first param should not lose information about the parameter space. This is a common issue in mixture models where one component's weight can be inferred from the others.
+        out =   np.stack(grids, axis=0) # shape [n_params, num_points]
+        return out[1:, :]  # Drop first param (redundant weights)
         
-        
-        
-        strategy = self.resolve_inferential_choice(context=context)
-        if strategy == 'posterior_predictive':
-            dens = self.predict_density(X, y_grid, context=context)
-            return {'densities': dens[None, ...], 'weights': np.array([1.0])}
+    def get_second_order_distribution(self, X, theta_grid=None):
+        """Provide second-order distribution payload for uncertainty measures."""
+        # Note that here we fit a density to the otherwise dirac mixture. Note this is only intended to be used for epistemic uncertainty measurement.
+        if theta_grid is None:
+            theta_grid = self.default_theta_grid(X)
 
-        member_dens = self.predict_density(X, y_grid, context=context)
-        n = member_dens.shape[0]
-        return {'densities': member_dens, 'weights': np.ones(n) / max(n, 1)}
+        if hasattr(self.members[0], 'get_params'):
+            params = np.stack([member.get_params(X) for member in self.members], axis=-1)  # [n_params, n_X, n_members]
+        else:
+            raise NotImplementedError(
+                f"Members of {self.__class__.__name__} do not implement get_params, so second-order distribution cannot be constructed."
+            )
+        # Fit a KDE to each condition parameter distribution across members.
+        theta_dens_by_X = []
+        for idx in range(X.shape[0]):
+            # drop first param, as weights always have 1 redundant dim. can cause rank degeneracy and KDE issues.
+            params_at_idx = params[1:, idx, :]  # [n_params-1, n_members]
+            # params_at_idx = params[:, idx, :]  # [n_params, n_members]
+            # use SciPy Gaussian KDE to estimate joint density over theta_grid.
+            print(params_at_idx, params_at_idx.shape)
+            # print("Quitting at file: ensemble.py, line 122 - check if get_params is returning expected shapes and values.")
+            # quit()
+            from scipy.stats import gaussian_kde
+            try:
+                kde = gaussian_kde(params_at_idx)
+            # Evaluate KDE on theta_grid to get density values. This will be used as the second-order distribution over parameters.    
+            except Exception as e:
+                raise RuntimeError(f"Error fitting KDE for sample {idx}: {e}")
+            dens = kde(theta_grid)  # [n_params, num_points]
+            # normalized_dens = dens / np.trapz(dens, theta_grid, axis=-1, keepdims=True)  # Normalize density
+            # stack  this density for each X to get [n_X, n_params, num_points]
+            theta_dens_by_X.append(dens) 
+        theta_dens_by_X = np.stack(theta_dens_by_X, axis=0)
+        return (theta_dens_by_X, theta_grid)
+        
+        # strategy = self.resolve_inferential_choice(context=context)
+        # if strategy == 'posterior_predictive':
+        #     dens = self.predict_density(X, y_grid, context=context)
+        #     return {'densities': dens[None, ...], 'weights': np.array([1.0])}
+
+        # member_dens = self.predict_density(X, y_grid, context=context)
+        # n = member_dens.shape[0]
+        # return {'densities': member_dens, 'weights': np.ones(n) / max(n, 1)}
 
     def get_member_parameters(self):
         """Return member indices as 'parameter samples' for integrated volume."""

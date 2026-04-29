@@ -56,9 +56,20 @@ class CondGMM(ModelBase):
             raise ValueError("Model must be fitted before getting parameters.")
         
         # Dictionary of parameters
-        gmm = self.model.condition(X)
-        weights = gmm.weights_         # (n_components,)
-        means = gmm.means_             # (n_components, n_targets)
-        covariances = gmm.covariances_ # (n_components, n_targets, n_targets)
-        # return as a single array weights, means, covariances.
-        return np.stack([weights, means.flatten(), covariances.flatten()])
+        gmms = self.model.condition(X)
+        weights = []
+        means = []
+        covariances = []
+        for gmm in gmms:
+            weights.append(gmm.weights_)         # (n_components,)
+            means.append(gmm.means_.flatten())           # (n_components, n_targets)
+            covariances.append(gmm.covariances_.flatten()) # (n_components, n_targets, n_targets)
+            # note: n_targets is 1 for univariate regression, so means and covariances will have a trailing dimension of size 1. We can flatten these for simplicity in downstream processing.
+        # Build per-sample parameter vectors and return shape [n_params, n_X]
+        per_sample_params = []
+        for w, m, c in zip(weights, means, covariances):
+            vec = np.concatenate([np.asarray(w).ravel(), np.asarray(m).ravel(), np.asarray(c).ravel()], axis=0)
+            per_sample_params.append(vec)
+        # Stack as columns: [n_params, n_X]
+        params = np.stack(per_sample_params, axis=1)
+        return params
