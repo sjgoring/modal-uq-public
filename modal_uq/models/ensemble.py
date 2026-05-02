@@ -1,5 +1,6 @@
 
 import numpy as np
+from .base import InferentialChoiceConfig
 from .base import ModelBase
 from ..registry import register, build
 
@@ -15,6 +16,26 @@ class Ensemble(ModelBase):
         self.members = []
         self._y_min = None; self._y_max = None
         self._member_losses = None  # For selection by criterion
+
+        if self.base_model == 'condgmm':
+            default_cfg = InferentialChoiceConfig(
+                predict='posterior_predictive',
+                approximate='point_estimate',
+                point_estimate_criterion='mle',
+            )
+            cfg = self.get_inferential_choice_config()
+            if inferential_choice is None:
+                self._inferential_choice_config = default_cfg
+            elif (cfg.predict, cfg.approximate, cfg.point_estimate_criterion) != (
+                default_cfg.predict,
+                default_cfg.approximate,
+                default_cfg.point_estimate_criterion,
+            ):
+                raise NotImplementedError(
+                    "Ensemble with base_model='condgmm' currently only supports inferential_choice "
+                    "predict='posterior_predictive', approximate='point_estimate', "
+                    "point_estimate_criterion='mle'."
+                )
 
     def fit(self, X, y, X_val=None, y_val=None):
         rng = np.random.default_rng(self.seed)
@@ -107,6 +128,10 @@ class Ensemble(ModelBase):
         member_dens = [m.predict_density(X, y_grid) for m in self.members]
         member_dens = np.stack(member_dens, axis=0)
 
+        if strategy == 'point_estimate':
+            idx = self._select_member_by_criterion('mle')
+            return member_dens[idx]
+
         if strategy == 'posterior_predictive':
             # For posterior predictive, we weight members by their posterior probabilities. As this is a simple ensemble without explicit Bayesian updating, we can use uniform weights or weights based on member performance. Here, we use uniform weights for simplicity.
             return np.mean(member_dens, axis=0)
@@ -119,6 +144,9 @@ class Ensemble(ModelBase):
 
     def default_theta_grid(self, X, num_points=100):
         """Default grid for second-order distribution over parameters."""
+        # Function is deprecated in favor of get_second_order_distribution which uses KDE + MC sampling.
+        raise NotImplementedError("default_theta_grid is deprecated. Use get_second_order_distribution for KDE + MC sampling of parameter space instead.")
+
         # Note, num_points is per dim.
         # For simplicity, we create a grid over the range of member parameters. This is a placeholder and can be improved with more sophisticated methods.
         if self._y_min is None or self._y_max is None:

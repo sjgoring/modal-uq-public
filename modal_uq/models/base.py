@@ -24,7 +24,7 @@ class InferentialChoiceConfig:
     """
     
     VALID_STRATEGIES = {'posterior_predictive', 'bma', 'point_estimate', 'bma_expected', 'posterior_weighted'}
-    CANONICAL_STRATEGIES = {'posterior_predictive', 'bma'}
+    CANONICAL_STRATEGIES = {'posterior_predictive', 'bma', 'point_estimate'}
     STRATEGY_ALIASES = {
         'bma_expected': 'bma',
         'posterior_weighted': 'bma',
@@ -119,13 +119,15 @@ class ModelBase(ABC):
             )
 
         if canonical == 'point_estimate':
-            warnings.warn(
-                "inferential_choice='point_estimate' is compatibility-only and maps to "
-                "'posterior_predictive' in active code paths.",
-                UserWarning,
-                stacklevel=2,
-            )
-            canonical = 'posterior_predictive'
+            if context == 'predict':
+                warnings.warn(
+                    "inferential_choice='point_estimate' is compatibility-only (for context peridict) and maps to "
+                    "'posterior_predictive' in active code paths.",
+                    UserWarning,
+                    stacklevel=2,
+                )
+                canonical = 'posterior_predictive'
+
 
         if canonical not in InferentialChoiceConfig.CANONICAL_STRATEGIES:
             raise NotImplementedError(

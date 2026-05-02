@@ -1,6 +1,7 @@
 import numpy as np
 from cgmm import ConditionalGMMRegressor
 
+from .base import InferentialChoiceConfig
 from .base import ModelBase
 from ..registry import register
 
@@ -10,6 +11,24 @@ class CondGMM(ModelBase):
     """Conditional Gaussian Mixture Model regressor using cgmm package."""
     def __init__(self, inferential_choice=None, n_components=5, **kwargs):
         super().__init__(inferential_choice)
+        default_cfg = InferentialChoiceConfig(
+            predict='posterior_predictive',
+            approximate='point_estimate',
+            point_estimate_criterion='mle',
+        )
+        cfg = self.get_inferential_choice_config()
+        if inferential_choice is None:
+            self._inferential_choice_config = default_cfg
+        elif (cfg.predict, cfg.approximate, cfg.point_estimate_criterion) != (
+            default_cfg.predict,
+            default_cfg.approximate,
+            default_cfg.point_estimate_criterion,
+        ):
+            raise NotImplementedError(
+                "CondGMM currently only supports inferential_choice "
+                "predict='posterior_predictive', approximate='point_estimate', "
+                "point_estimate_criterion='mle'."
+            )
         self.model = ConditionalGMMRegressor(n_components=n_components, **kwargs)
         self._y_min = None
         self._y_max = None

@@ -186,6 +186,35 @@ class QUESTUncertainty(UncertaintyBase):
 
         raise NotImplementedError("Grid-based HDR computation is deprecated. Use Monte Carlo methods via model.sample_output, model.output_bounds and model.density_function_for_input.")
 
+    def _hdr_resampler_from_samples(self, samples, sample_mask):
+        """Create a sampler function that resamples from HDR-accepted MC samples.
+
+        Parameters
+        - samples: array of shape (S, N, d) (MC samples produced earlier)
+        - sample_mask: boolean array of shape (S, N) indicating HDR membership
+
+        Returns
+        - sampler(X, n_samples, rng) -> (n_samples, N, d)
+        """
+        samples = np.asarray(samples)
+        sample_mask = np.asarray(sample_mask)
+
+        def sampler(X_, n_samples, rng):
+            rng = np.random.default_rng(rng)
+            N = X_.shape[0]
+            d = samples.shape[-1]
+            out = np.zeros((n_samples, N, d))
+            for i in range(N):
+                hdr_samples = samples[sample_mask[:, i], i, :]
+                if hdr_samples.shape[0] > 0:
+                    idx = rng.choice(hdr_samples.shape[0], size=n_samples, replace=True)
+                    out[:, i, :] = hdr_samples[idx]
+                else:
+                    out[:, i, :] = rng.standard_normal((n_samples, d))
+            return out
+
+        return sampler
+
     def _build_bounds_from_samples(self, samples, q_low=None, q_high=None, pad_frac=None):
         q_low = self.bounds_q_low if q_low is None else q_low
         q_high = self.bounds_q_high if q_high is None else q_high
@@ -300,6 +329,90 @@ class QUESTUncertainty(UncertaintyBase):
 
 
     def _compute_total(self, model, X):
+        if self.scope == 'local':
+            return self._compute_total_helper(model, X, alpha=self.alpha)
+        else:
+            # integral under curve for various alpha
+            f = []
+            alphas = np.linspace(0.01, 0.99, num=100)
+            for alpha in alphas:
+                f.append(np.asarray(self._compute_total_helper(model, X, alpha=alpha)))
+            f = np.stack(f, axis=0)
+            return np.trapz(f, alphas, axis=0)
+
+    def _compute_total_helper(self, model, X, alpha):
+        # Computers the local version of TU, is called multiple times for global measure.
+
+        # Override alpha and scope
+        alpha_old = self.alpha
+        scope_old = self.scope
+        self.alpha = alpha
+        self.scope = 'local'
+
+        try:
+            # First, obtain local AU measure.
+            au = self._compute_aleatoric(model, X)
+
+            # Inferential choices - currently not flexible.
+            # p* - MLE. Derived via approximate context.
+            # p_hat - posterior predictive. Derived via predict context.
+
+            # Ensure config is set correctly, with approximate context as MLE, and predict as posterior predictive.
+            cfg = model.get_inferential_choice_config()
+            if cfg.predict != 'posterior_predictive' or cfg.approximate != 'point_estimate' or cfg.point_estimate_criterion != 'mle':
+                raise NotImplementedError(
+                    f"Model inferential choice contexts must be set to predict='posterior_predictive' and approximate='point_estimate', with point_estimate_criterion='mle' for QUEST uncertainty. Current settings: predict='{cfg.predict}', approximate='{cfg.approximate}'."
+                )
+
+            y_grid = model.default_y_grid(X, grid_points=self.grid_points, y_pad=self.y_pad)
+
+            def p_star(points, input_index=0):
+                x_i = np.asarray(X)[input_index:input_index + 1]
+                dens = model.predict_density(x_i, np.asarray(points), context='approximate')
+                return np.asarray(dens).reshape(-1)
+
+            def p_hat(points, input_index=0):
+                x_i = np.asarray(X)[input_index:input_index + 1]
+                dens = model.predict_density(x_i, np.asarray(points), context='predict')
+                return np.asarray(dens).reshape(-1)
+
+            # Obtain HDR threshold estimates and the corresponding accepted samples.
+            sampler = lambda X_, n_samples, rng: model.sample_output(X_, n_samples, rng)
+
+            c_alpha_star, _, samples_star, samples_star_mask = self._hdr_from_density_function(p_star, sampler, X, alpha)
+            c_alpha_hat, _, samples_hat, sample_hat_mask = self._hdr_from_density_function(p_hat, sampler, X, alpha)
+
+            # Redefine samplers for truncated distributions using HDR-filtered samples.
+            sampler_p_star = self._hdr_resampler_from_samples(samples_star, samples_star_mask)
+            sampler_p_hat = self._hdr_resampler_from_samples(samples_hat, sample_hat_mask)
+
+            def p_star_trunc(points, input_index=0):
+                vals = np.asarray(p_star(points, input_index=input_index)).ravel()
+                return np.where(vals >= c_alpha_star[input_index], vals, 0.0)
+
+            def p_hat_trunc(points, input_index=0):
+                vals = np.asarray(p_hat(points, input_index=input_index)).ravel()
+                return np.where(vals >= c_alpha_hat[input_index], vals, 0.0)
+
+            # Then, divide by 1-TV(p_alpha*,\hat{p_alpha})
+            tv = self.tv_distance_mc(
+                p_star_trunc,
+                p_hat_trunc,
+                sampler_p_star,
+                sampler_p_hat,
+                X,
+                n_samples=self.mc_n_samples,
+                random_state=self.mc_random_state,
+            )
+
+            out = au * (1 - tv)
+            return out
+        finally:
+            # Post - reset scopes
+            self.alpha = alpha_old
+            self.scope = scope_old
+
+
         raise NotImplementedError("Total uncertainty for QUEST not yet determined. See output file for values of EU and AU. TU will be a function of these.")
         # y_grid = model.default_y_grid(X, grid_points=self.grid_points, y_pad=self.y_pad)
         # dens_pred = self._predict_density_collection(model, X, y_grid, context='predict')
@@ -484,3 +597,56 @@ class QUESTUncertainty(UncertaintyBase):
     #         # For input-dependent, call from score for each input
     #         raise NotImplementedError("Call integrated_volume_from_parameter_samples for each input in score.")
     #     return self.integrated_volume_from_parameter_samples(theta_samples, model)
+
+    def tv_distance_mc(
+        self,
+        p_star_func,
+        p_hat_func,
+        sampler_p_star,
+        sampler_p_hat,
+        X,
+        n_samples=100_000,
+        random_state=None,
+        eps=1e-12
+    ):
+        rng = np.random.default_rng(random_state)
+        X = np.asarray(X)
+        N = X.shape[0]
+
+        # Decide mixture allocation
+        choose = rng.uniform(size=n_samples) < 0.5
+        n_p = int(choose.sum())
+        n_q = int(n_samples - n_p)
+
+        # Draw pooled samples from each truncated sampler (may be 0)
+        d = None
+        sp = sampler_p_star(X, n_p, rng) if n_p > 0 else np.empty((0, N, 0))
+        if n_p > 0:
+            d = sp.shape[-1]
+        sq = sampler_p_hat(X, n_q, rng) if n_q > 0 else np.empty((0, N, d if d is not None else 0))
+        if d is None:
+            # zero samples from both -> nothing to do
+            return np.zeros(N) if N > 1 else 0.0
+
+        # Assemble mixture samples shape (n_samples, N, d)
+        mix_samples = np.empty((n_samples, N, d))
+        if n_p > 0:
+            mix_samples[choose, :, :] = sp
+        if n_q > 0:
+            mix_samples[~choose, :, :] = sq
+
+        # Compute TV per input
+        tvs = np.zeros(N)
+        for i in range(N):
+            pts = mix_samples[:, i, :]
+            # Ensure shape (M, d) or (M,) as accepted by density funcs
+            p_vals = np.asarray(p_star_func(pts, input_index=i)).ravel()
+            q_vals = np.asarray(p_hat_func(pts, input_index=i)).ravel()
+
+            mix = 0.5 * (p_vals + q_vals)
+            # where mix is extremely small, set weight to 0 (both densities ~0)
+            denom = np.maximum(mix, eps)
+            weights = np.abs(p_vals - q_vals) / denom
+            tvs[i] = 0.5 * np.mean(weights)
+
+        return float(tvs[0]) if N == 1 else tvs
