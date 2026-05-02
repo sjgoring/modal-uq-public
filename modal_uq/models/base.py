@@ -31,7 +31,7 @@ class InferentialChoiceConfig:
     }
     VALID_CRITERIA = {'mle', 'map', 'mean', 'median'}
     
-    def __init__(self, predict: str = 'posterior_predictive', approximate: str = 'posterior_predictive', 
+    def __init__(self, predict: str = 'posterior_predictive', approximate: str = 'point_estimate', 
                  point_estimate_criterion: str = 'mle'):
         # Validate strategies
         if predict not in self.VALID_STRATEGIES:

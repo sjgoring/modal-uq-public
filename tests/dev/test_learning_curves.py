@@ -165,7 +165,7 @@ def test_learning_curves(capsys):
     # CI-friendly defaults
     N_REPS = 3
     K_SIZES = 6
-    N_SAMPLES = 100000 # Number of training samples, not total number of samples (i.e. n_train = n_total - n_test)
+    N_SAMPLES = 10000 # Number of training samples, not total number of samples (i.e. n_train = n_total - n_test)
     MIN_TRAIN = 10
     METRIC = "nll"
     DATA = "SYNTH_MULTI_MODAL"
@@ -198,7 +198,7 @@ def test_learning_curves(capsys):
     # models = [(MixtureDensityModel, mdn_kwargs, "MixtureDensityModel")]
 
     # Parallel settings
-    n_jobs = max(1, (os.cpu_count() or 2) - 1)
+    n_jobs = max(1, (os.cpu_count()) - 1)
     # n_jobs = 1 # for testing
     
     # Prepare one dataset to determine maximum available training size
@@ -301,6 +301,7 @@ def test_learning_curves(capsys):
         plt.plot(train_sizes, res["means"], marker="o", label=name)
         plt.fill_between(train_sizes, res["means"] - res["stds"], res["means"] + res["stds"], alpha=0.2)
     plt.xscale("log")
+    plt.yscale("log")
     plt.xlabel("Training set size")
     plt.ylabel(metric_label)
     plt.title(f"Learning curve: {metric_label} vs training set size")
@@ -325,3 +326,6 @@ def test_learning_curves(capsys):
             f.write(captured.err)
 
     assert os.path.exists(output_txt_path)
+
+if __name__ == "__main__":
+    test_learning_curves(capsys=None)
