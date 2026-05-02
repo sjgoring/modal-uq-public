@@ -4,6 +4,7 @@ from cgmm import ConditionalGMMRegressor
 from .base import InferentialChoiceConfig
 from .base import ModelBase
 from ..registry import register
+from  collections.abc import Iterable
 
 @register('model','condgmm')
 
@@ -38,7 +39,7 @@ class CondGMM(ModelBase):
         self._y_min = float(np.min(y))
         self._y_max = float(np.max(y))
 
-    def predict_density(self, X, y_grid, context='predict'):
+    def predict_density(self, X, y, context='predict'):
         strategy = self.resolve_inferential_choice(context=context)
         if strategy == 'bma':
             raise NotImplementedError(
@@ -48,19 +49,15 @@ class CondGMM(ModelBase):
             # CondGMM is deterministic, so we return the same density regardless of the inferential choice.
             pass
 
-        dens = np.zeros((X.shape[0], y_grid.shape[0]))
+        dens = np.zeros((X.shape[0], y.shape[0]))
         gmms = self.model.condition(X)  # Returns list of sklearn GaussianMixture for each X.
+        
+        if not isinstance(gmms, Iterable):
+            gmms = [gmms] * X.shape[0]
+
         for gmm, idx in zip(gmms, range(X.shape[0])):
-            dens[idx] = gmm.score_samples(y_grid.reshape(-1, 1))  # log density
+            dens[idx] = gmm.score_samples(y.reshape(-1, 1))  # log density
             dens[idx] = np.exp(dens[idx])  # convert log density to density
-            # Normalize numerically over the provided grid for stable downstream metrics.
-            integral = np.trapz(dens[idx], y_grid)
-            if not np.isfinite(integral) or integral <= 0:
-                raise ValueError(
-                    f"Density for sample {idx} has invalid integral ({integral})."
-                )
-            if not np.isclose(integral, 1.0, atol=1e-3):
-                dens[idx] /= integral
         return dens
 
     # Deterministic models should not override this method, as they do not provide a second-order distribution. The default implementation raises NotImplementedError to indicate that this functionality is not available for CondGMM.

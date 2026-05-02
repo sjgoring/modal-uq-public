@@ -6,7 +6,7 @@ from ..registry import register, build
 
 @register('model','ensemble')
 class Ensemble(ModelBase):
-    def __init__(self, base_model='mdn', base_params=None, n_members=5, bootstrap=True, seed=42, inferential_choice=None):
+    def __init__(self, base_model='condgmm', base_params=None, n_members=5, bootstrap=True, seed=42, inferential_choice=None):
         super().__init__(inferential_choice=inferential_choice)
         self.base_model = base_model
         self.base_params = base_params or {}
