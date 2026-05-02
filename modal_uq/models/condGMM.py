@@ -73,3 +73,50 @@ class CondGMM(ModelBase):
         # Stack as columns: [n_params, n_X]
         params = np.stack(per_sample_params, axis=1)
         return params
+    
+    def sample_output(self, X, n_samples, rng):
+        """
+        Sample outputs from the conditional GMM for each input in X.
+
+        Returns array of shape (n_samples, N, d).
+        """
+        gmms = self.model.condition(X)
+        N = X.shape[0]
+        # Determine output dimensionality from GMM means
+        d = gmms[0].means_.shape[1]
+        samples = np.zeros((n_samples, N, d))
+        for i, gmm in enumerate(gmms):
+            s, _ = gmm.sample(n_samples)
+            samples[:, i, :] = s.reshape(n_samples, d)
+        return samples
+
+    def output_bounds(self, X, q_low=1e-3, q_high=1-1e-3, pad_frac=0.05, n_samples=10000, rng=None):
+        """
+        Build per-input axis-aligned bounds by sampling the conditional GMM and using quantiles.
+
+        Returns bounds shaped (N, d, 2).
+        """
+        rng = np.random.default_rng(rng)
+        samples = self.sample_output(X, n_samples, rng)
+        # samples shape: (n_samples, N, d)
+        lows = np.quantile(samples, q_low, axis=0)  # (N, d)
+        highs = np.quantile(samples, q_high, axis=0)  # (N, d)
+        pad = (highs - lows) * pad_frac
+        bounds = np.stack([lows - pad, highs + pad], axis=-1)  # (N, d, 2)
+        return bounds
+
+    def density_function_for_input(self, X):
+        """
+        Return a density callable: density_func(points, input_index)
+
+        `points` shape: (M, d)
+        Returns: (M,) densities for the specified input_index.
+        """
+        gmms = self.model.condition(X)
+
+        def density_func(points, input_index=0):
+            gmm = gmms[input_index]
+            logp = gmm.score_samples(np.asarray(points).reshape(-1, gmm.means_.shape[1]))
+            return np.exp(logp)
+
+        return density_func
