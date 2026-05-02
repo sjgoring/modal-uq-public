@@ -1,11 +1,12 @@
 
 import numpy as np
+from .base import InferentialChoiceConfig
 from .base import ModelBase
 from ..registry import register, build
 
 @register('model','ensemble')
 class Ensemble(ModelBase):
-    def __init__(self, base_model='mdn', base_params=None, n_members=5, bootstrap=True, seed=42, inferential_choice=None):
+    def __init__(self, base_model='condgmm', base_params=None, n_members=5, bootstrap=True, seed=42, inferential_choice=None):
         super().__init__(inferential_choice=inferential_choice)
         self.base_model = base_model
         self.base_params = base_params or {}
@@ -15,6 +16,26 @@ class Ensemble(ModelBase):
         self.members = []
         self._y_min = None; self._y_max = None
         self._member_losses = None  # For selection by criterion
+
+        if self.base_model == 'condgmm':
+            default_cfg = InferentialChoiceConfig(
+                predict='posterior_predictive',
+                approximate='point_estimate',
+                point_estimate_criterion='mle',
+            )
+            cfg = self.get_inferential_choice_config()
+            if inferential_choice is None:
+                self._inferential_choice_config = default_cfg
+            elif (cfg.predict, cfg.approximate, cfg.point_estimate_criterion) != (
+                default_cfg.predict,
+                default_cfg.approximate,
+                default_cfg.point_estimate_criterion,
+            ):
+                raise NotImplementedError(
+                    "Ensemble with base_model='condgmm' currently only supports inferential_choice "
+                    "predict='posterior_predictive', approximate='point_estimate', "
+                    "point_estimate_criterion='mle'."
+                )
 
     def fit(self, X, y, X_val=None, y_val=None):
         rng = np.random.default_rng(self.seed)
@@ -107,6 +128,10 @@ class Ensemble(ModelBase):
         member_dens = [m.predict_density(X, y_grid) for m in self.members]
         member_dens = np.stack(member_dens, axis=0)
 
+        if strategy == 'point_estimate':
+            idx = self._select_member_by_criterion('mle')
+            return member_dens[idx]
+
         if strategy == 'posterior_predictive':
             # For posterior predictive, we weight members by their posterior probabilities. As this is a simple ensemble without explicit Bayesian updating, we can use uniform weights or weights based on member performance. Here, we use uniform weights for simplicity.
             return np.mean(member_dens, axis=0)
@@ -119,11 +144,17 @@ class Ensemble(ModelBase):
 
     def default_theta_grid(self, X, num_points=100):
         """Default grid for second-order distribution over parameters."""
+        # Function is deprecated in favor of get_second_order_distribution which uses KDE + MC sampling.
+        raise NotImplementedError("default_theta_grid is deprecated. Use get_second_order_distribution for KDE + MC sampling of parameter space instead.")
+
         # Note, num_points is per dim.
         # For simplicity, we create a grid over the range of member parameters. This is a placeholder and can be improved with more sophisticated methods.
         if self._y_min is None or self._y_max is None:
             raise ValueError("Model must be fitted before creating default theta grid.")
-        
+        # warn if grid will be very large
+        if num_points ** (self.members[0].get_params(X).shape[0] - 1) > 1e6:
+            print(f"Warning: theta grid will have {num_points ** (self.members[0].get_params(X).shape[0] - 1)} points, which may be computationally expensive.")
+
         # check all members, for each parameter obtain the min and max.
         param_mins = []
         param_maxs = []
@@ -156,53 +187,136 @@ class Ensemble(ModelBase):
         # Returns a grid of shape [n_params, num_points]
         # Drop first param (e.g. weights) as it is redundant, to avoid rank degeneracy in KDE.
         # Check performed above to ensure first n_members params are weights that sum to 1, so dropping first param should not lose information about the parameter space. This is a common issue in mixture models where one component's weight can be inferred from the others.
-        out =   np.stack(grids, axis=0) # shape [n_params, num_points]
-        return out[1:, :]  # Drop first param (redundant weights)
-        
-    def get_second_order_distribution(self, X, theta_grid=None):
-        """Provide second-order distribution payload for uncertainty measures."""
-        # Note that here we fit a density to the otherwise dirac mixture. Note this is only intended to be used for epistemic uncertainty measurement.
-        if theta_grid is None:
-            theta_grid = self.default_theta_grid(X)
+        stacked =   np.stack(grids, axis=0) # shape [n_params, num_points]
+        stacked  = stacked[1:, :]  # Drop first param (e.g. weights) to avoid rank degeneracy in KDE.
+        # use the marginal grids for each parameter to create a full grid of parameter combinations. This will be used for KDE evaluation in get_second_order_distribution.
+        mesh = np.mgrid(stacked)
 
+
+
+        mesh = np.meshgrid(*stacked, indexing='ij')  # [n_params-1, num_points, ..., num_points]
+        return mesh
+        
+    def get_second_order_distribution(self, X, n_mc_samples=100000, random_state=None):
+        """
+        Provide second-order (parameter-space) distribution via KDE + MC sampling.
+        
+        For each input X[i], learns a Gaussian KDE from empirical member parameters,
+        then pre-samples from that KDE to provide both a density callable and MC samples
+        for epistemic QUEST computation.
+        
+        Parameters
+        ----------
+        X : array
+            Input features of shape (N, d_in)
+        n_mc_samples : int, default=100000
+            Number of Monte Carlo samples to draw from each KDE
+        random_state : int or np.random.Generator, optional
+            Random state for reproducibility
+            
+        Returns
+        -------
+        kdes_list : list of scipy.stats.gaussian_kde
+            One fitted KDE per input X[i]
+        samples_list : list of arrays
+            Pre-sampled arrays from KDE, shape (n_mc_samples, n_params-1) per input
+        """
+        rng = np.random.default_rng(random_state)
+        
         if hasattr(self.members[0], 'get_params'):
             params = np.stack([member.get_params(X) for member in self.members], axis=-1)  # [n_params, n_X, n_members]
         else:
             raise NotImplementedError(
                 f"Members of {self.__class__.__name__} do not implement get_params, so second-order distribution cannot be constructed."
             )
-        # Fit a KDE to each condition parameter distribution across members.
-        theta_dens_by_X = []
+        
+        kdes_list = []
+        samples_list = []
+        
+        from scipy.stats import gaussian_kde
+        
         for idx in range(X.shape[0]):
-            # drop first param, as weights always have 1 redundant dim. can cause rank degeneracy and KDE issues.
+            # Drop first param (mixture weights) to avoid rank degeneracy from constraint (weights sum to 1)
             params_at_idx = params[1:, idx, :]  # [n_params-1, n_members]
-            # params_at_idx = params[:, idx, :]  # [n_params, n_members]
-            # use SciPy Gaussian KDE to estimate joint density over theta_grid.
-            print(params_at_idx, params_at_idx.shape)
-            # print("Quitting at file: ensemble.py, line 122 - check if get_params is returning expected shapes and values.")
-            # quit()
-            from scipy.stats import gaussian_kde
+            
             try:
                 kde = gaussian_kde(params_at_idx)
-            # Evaluate KDE on theta_grid to get density values. This will be used as the second-order distribution over parameters.    
             except Exception as e:
                 raise RuntimeError(f"Error fitting KDE for sample {idx}: {e}")
-            dens = kde(theta_grid)  # [n_params, num_points]
-            # normalized_dens = dens / np.trapz(dens, theta_grid, axis=-1, keepdims=True)  # Normalize density
-            # stack  this density for each X to get [n_X, n_params, num_points]
-            theta_dens_by_X.append(dens) 
-        theta_dens_by_X = np.stack(theta_dens_by_X, axis=0)
-        return (theta_dens_by_X, theta_grid)
+            
+            # Pre-sample from KDE for HDR thresholding
+            # Note: gaussian_kde.resample doesn't accept random_state, so we use the rng's integers to seed it
+            mc_samples = kde.resample(size=n_mc_samples)  # [n_params-1, n_mc_samples]
+            mc_samples = mc_samples.T  # -> [n_mc_samples, n_params-1]
+            
+            kdes_list.append(kde)
+            samples_list.append(mc_samples)
         
-        # strategy = self.resolve_inferential_choice(context=context)
-        # if strategy == 'posterior_predictive':
-        #     dens = self.predict_density(X, y_grid, context=context)
-        #     return {'densities': dens[None, ...], 'weights': np.array([1.0])}
-
-        # member_dens = self.predict_density(X, y_grid, context=context)
-        # n = member_dens.shape[0]
-        # return {'densities': member_dens, 'weights': np.ones(n) / max(n, 1)}
+        return kdes_list, samples_list
 
     def get_member_parameters(self):
         """Return member indices as 'parameter samples' for integrated volume."""
         return np.arange(len(self.members)).reshape(-1, 1)
+
+    def sample_output(self, X, n_samples, rng):
+        """
+        Sample outputs from the ensemble predictive distribution.
+
+        Requires that members implement `sample_output`. Returns (n_samples, N, d).
+        """
+        if len(self.members) == 0:
+            raise RuntimeError("Ensemble has no members. Call fit() first.")
+        # Check members implement sample_output
+        if not all(hasattr(m, 'sample_output') for m in self.members):
+            raise NotImplementedError("All ensemble members must implement sample_output for ensemble sampling.")
+        rng = np.random.default_rng(rng)
+        # Draw member indices for each sample: shape (n_samples,)
+        member_idx = rng.integers(0, len(self.members), size=n_samples)
+        samples_list = []
+        # For efficiency, request n_samples from each member and then select
+        # but simplest: call sample_output for each member once with n_samples and select
+        member_samples = [m.sample_output(X, n_samples, rng) for m in self.members]
+        # member_samples: list of arrays (n_samples, N, d)
+        # assemble final samples by selecting per-sample member
+        n_samples_local = n_samples
+        N = X.shape[0]
+        d = member_samples[0].shape[2]
+        out = np.zeros((n_samples_local, N, d))
+        for s in range(n_samples_local):
+            m = member_idx[s]
+            out[s] = member_samples[m][s]
+        return out
+
+    def output_bounds(self, X, q_low=1e-3, q_high=1-1e-3, pad_frac=0.05, n_samples=10000, rng=None):
+        """
+        Build per-input bounds by aggregating member bounds.
+
+        Returns (N, d, 2).
+        """
+        # Prefer members providing output_bounds
+        member_bounds = []
+        for m in self.members:
+            if hasattr(m, 'output_bounds'):
+                member_bounds.append(m.output_bounds(X, q_low=q_low, q_high=q_high, pad_frac=pad_frac, n_samples=n_samples, rng=rng))
+            else:
+                raise NotImplementedError("All ensemble members must implement output_bounds to build ensemble bounds.")
+        # member_bounds: list of arrays (N, d, 2)
+        stacked = np.stack(member_bounds, axis=0)  # (n_members, N, d, 2)
+        lows = stacked[:, :, :, 0].min(axis=0)  # (N, d)
+        highs = stacked[:, :, :, 1].max(axis=0)  # (N, d)
+        return np.stack([lows, highs], axis=-1)
+
+    def density_function_for_input(self, X):
+        """
+        Return a density function averaging member densities: density_func(points, input_index)
+        """
+        if not all(hasattr(m, 'density_function_for_input') for m in self.members):
+            raise NotImplementedError("All members must implement density_function_for_input to build ensemble density.")
+        member_funcs = [m.density_function_for_input(X) for m in self.members]
+
+        def density_func(points, input_index=0):
+            # Average densities across members for the given input index
+            vals = np.stack([f(points, input_index) for f in member_funcs], axis=0)
+            return np.mean(vals, axis=0)
+
+        return density_func

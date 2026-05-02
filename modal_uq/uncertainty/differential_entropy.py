@@ -2,6 +2,7 @@ import numpy as np
 from .base import UncertaintyBase
 from ..registry import register
 import scipy.integrate as integrate
+from scipy.special import rel_entr
 
 @register('uncertainty','differential_entropy')
 class DifferentialEntropy(UncertaintyBase):
@@ -69,7 +70,7 @@ class DifferentialEntropy(UncertaintyBase):
         return H
 
     @staticmethod
-    def _kl_divergence(p, q, y_grid):
+    def _kl_divergence(p, q, y_grid, base=np.e):
         """
         Compute KL divergence KL(p || q) = ∫ p log(p / q) dy.
         
@@ -91,16 +92,27 @@ class DifferentialEntropy(UncertaintyBase):
         p = p / (integrate.trapezoid(p, y_grid) + 1e-12)
         q = q / (integrate.trapezoid(q, y_grid) + 1e-12)
         
+        # If distributions are effectively identical, return 0.0 early
+        if np.allclose(p, q, atol=1e-12, rtol=1e-12):
+            return 0.0
+
         # Clip q to avoid log(0)
         q = np.clip(q, 1e-40, None)
         
-        # Compute integrand p * log(p / q)
-        integrand = p * np.log(p / q)
-        integrand = np.where(p > 0, integrand, 0.0)  # Force 0*log(0) = 0
-        
-        # Integrate
+        # Clip q to avoid log(0); keep p exact so p==0 stays handled below
+        q_clip = np.clip(q, 1e-40, None)
+
+        # Compute integrand safely: p * log(p / q_clip), but define 0*log0 := 0
+        with np.errstate(divide='ignore', invalid='ignore'):
+            ratio = p / q_clip
+            integrand = np.where(p > 0, p * np.log(ratio), 0.0)
+
         kl = integrate.trapezoid(integrand, y_grid)
-        return np.maximum(kl, 0)  # Ensure non-negative
+        kl = np.maximum(kl, 0.0)  # numeric safety
+
+        if base != np.e:
+            kl = kl / np.log(base)
+        return kl
 
     def _compute_total(self, model, X):
         y_grid = model.default_y_grid(X, grid_points=self.grid_points, y_pad=self.y_pad)
@@ -115,9 +127,32 @@ class DifferentialEntropy(UncertaintyBase):
         return H_approx.mean(axis=0)
 
     def _compute_epistemic(self, model, X):
+        ## Compute the KL-Div over a shared y-grid (y will only ever be 1-Dim)
+
+        y_grid = model.default_y_grid(X, grid_points=self.grid_points, y_pad=self.y_pad)
+        dens_approx = self._predict_density_collection(model, X, y_grid, context='approximate')
+        dens_pred = self._predict_density_collection(model, X, y_grid, context='predict')
+
+        # most dens will be [1,N,G]. Raise an error if not.
+        if dens_approx.shape[0] != 1 or dens_pred.shape[0] != 1:
+            raise NotImplementedError("Epistemic uncertainty by entropy is currently implemented only for single density per context (shape [1,N,G]). Consider implementing the KL divergence computation for multiple densities if needed.")
+
+        # flatten to [N,G] for KL computation
+        dens_approx = dens_approx[0]
+        dens_pred = dens_pred[0]
+
+        kl_divs = []
+        for idx in range(X.shape[0]):
+            kl_divs.append(self._kl_divergence(dens_approx[idx,:], dens_pred[idx,:], y_grid, self.base))
+        return np.array(kl_divs)
+
+
+
         y_grid = model.default_y_grid(X, grid_points=self.grid_points, y_pad=self.y_pad)
         dens_pred = self._predict_density_collection(model, X, y_grid, context='predict')
         dens_approx = self._predict_density_collection(model, X, y_grid, context='approximate')
+
+        # kl_div = 
 
         S_pred = dens_pred.shape[0]
         S_approx = dens_approx.shape[0]
@@ -164,6 +199,13 @@ class DifferentialEntropy(UncertaintyBase):
         return self._compute_epistemic(model, X)
 
     def score(self, model, X, y_true=None):
+        # Checking model config compatible.
+        cfg = model.get_inferential_choice_config()
+        if cfg.predict != 'posterior_predictive' or cfg.approximate != 'point_estimate' or cfg.point_estimate_criterion != 'mle':
+            raise NotImplementedError(
+                f"Model inferential choice contexts must be set to predict='posterior_predictive' and approximate='point_estimate', with point_estimate_criterion='mle' for QUEST uncertainty. Current settings: predict='{cfg.predict}', approximate='{cfg.approximate}'."
+            )
+
         """Dispatch to total/aleatoric/epistemic score by decomposition."""
         if self.decomposition == 'total':
             return self.score_total(model, X, y_true=y_true)

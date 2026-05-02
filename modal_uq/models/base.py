@@ -24,14 +24,14 @@ class InferentialChoiceConfig:
     """
     
     VALID_STRATEGIES = {'posterior_predictive', 'bma', 'point_estimate', 'bma_expected', 'posterior_weighted'}
-    CANONICAL_STRATEGIES = {'posterior_predictive', 'bma'}
+    CANONICAL_STRATEGIES = {'posterior_predictive', 'bma', 'point_estimate'}
     STRATEGY_ALIASES = {
         'bma_expected': 'bma',
         'posterior_weighted': 'bma',
     }
     VALID_CRITERIA = {'mle', 'map', 'mean', 'median'}
     
-    def __init__(self, predict: str = 'posterior_predictive', approximate: str = 'posterior_predictive', 
+    def __init__(self, predict: str = 'posterior_predictive', approximate: str = 'point_estimate', 
                  point_estimate_criterion: str = 'mle'):
         # Validate strategies
         if predict not in self.VALID_STRATEGIES:
@@ -119,13 +119,15 @@ class ModelBase(ABC):
             )
 
         if canonical == 'point_estimate':
-            warnings.warn(
-                "inferential_choice='point_estimate' is compatibility-only and maps to "
-                "'posterior_predictive' in active code paths.",
-                UserWarning,
-                stacklevel=2,
-            )
-            canonical = 'posterior_predictive'
+            if context == 'predict':
+                warnings.warn(
+                    "inferential_choice='point_estimate' is compatibility-only (for context peridict) and maps to "
+                    "'posterior_predictive' in active code paths.",
+                    UserWarning,
+                    stacklevel=2,
+                )
+                canonical = 'posterior_predictive'
+
 
         if canonical not in InferentialChoiceConfig.CANONICAL_STRATEGIES:
             raise NotImplementedError(
@@ -194,3 +196,32 @@ class ModelBase(ABC):
         Ey2 = integrate.trapezoid(dens * (y_grid[None,:]**2), y_grid, axis=1)
         Var = Ey2 - Ey**2
         return Ey, Var
+
+    # --- Monte Carlo adapters for HDR/volume estimation ---
+    def sample_output(self, X, n_samples, rng):
+        """
+        Optional: sample outputs y from the model conditional on inputs X.
+
+        Signature: sampler(X, n_samples, rng) -> samples shaped (n_samples, N, d)
+        Must be implemented by models that support Monte Carlo HDR estimation.
+        """
+        raise NotImplementedError(f"{self.__class__.__name__} does not implement sample_output(X, n_samples, rng).")
+
+    def output_bounds(self, X, q_low=1e-3, q_high=1-1e-3, pad_frac=0.05, n_samples=10000, rng=None):
+        """
+        Optional: return per-input axis-aligned bounds covering output support.
+
+        Expected shape: (N, d, 2) where bounds[i, j] = [low, high].
+        Implementations may construct bounds by sampling and using quantiles.
+        """
+        raise NotImplementedError(f"{self.__class__.__name__} does not implement output_bounds(X, ...).")
+
+    def density_function_for_input(self, X):
+        """
+        Optional: return a callable density function for the provided inputs.
+
+        The returned callable should have signature `density_func(points, input_index)` or
+        accept points and an optional input index. A simple form is `density_func(points, input_index=0)`
+        returning an array of densities for `points` (shape (M,)).
+        """
+        raise NotImplementedError(f"{self.__class__.__name__} does not implement density_function_for_input(X).")
