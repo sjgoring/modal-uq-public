@@ -32,6 +32,10 @@ class DifferentialEntropy(UncertaintyBase):
         self.grid_points = grid_points
         self.y_pad = y_pad
         self.n_param_samples = n_param_samples
+        # TODO: check if inferential choices are:
+        # predict - posterior pred
+        # approximate - point estimate, MLE.
+        # Otherwise, raise NotImplementedError
 
     @staticmethod
     def _normalize_last_axis(arr, y_grid):
@@ -115,6 +119,13 @@ class DifferentialEntropy(UncertaintyBase):
         return H_approx.mean(axis=0)
 
     def _compute_epistemic(self, model, X):
+        ## Compute the KL-Div over a shared y-grid (y will only ever be 1-Dim)
+        
+
+
+
+
+
         y_grid = model.default_y_grid(X, grid_points=self.grid_points, y_pad=self.y_pad)
         dens_pred = self._predict_density_collection(model, X, y_grid, context='predict')
         dens_approx = self._predict_density_collection(model, X, y_grid, context='approximate')
