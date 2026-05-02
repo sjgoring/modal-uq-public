@@ -73,11 +73,15 @@ class PredictiveVariance(UncertaintyBase):
         return Var_approx_s.mean(axis=0)
 
     def _compute_epistemic(self, model, X):
-        # Not implemented for variance under the current inferential_choice setup.
-        raise NotImplementedError("Epistemic variance is not implemented under current inferential_choice contexts. Consider using a different uncertainty measure or implementing epistemic variance with a different approach.")
-        # aleatoric = self._compute_aleatoric(model, X)
-        # return np.zeros_like(aleatoric)
+        y_grid = model.default_y_grid(X, grid_points=self.grid_points, y_pad=self.y_pad)
+        dens_pred = self._predict_density_collection(model, X, y_grid, context='predict')
+        Ey_pred, _ = self._moments_from_density(dens_pred, y_grid)
 
+        if Ey_pred.ndim == 2:
+            return np.var(Ey_pred, axis=0)
+
+        return np.zeros(len(X), dtype=float)
+        
     def score_total(self, model, X, y_true=None):
         return self._compute_total(model, X)
 

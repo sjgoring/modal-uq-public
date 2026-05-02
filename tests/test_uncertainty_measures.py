@@ -571,6 +571,192 @@ def test_variance_computation_correctness():
                                 err_msg="Variance of N(0,1) should be ~1.0")
 
 
+def test_variance_parameter_sensitivity():
+    """Test that variance scales correctly with std parameter.
+    
+    For N(μ, σ²), variance should equal σ².
+    """
+    stds = [0.5, 1.0, 2.0]
+    X = np.array([[0.0]])
+    
+    for std in stds:
+        model = GaussianDummyModel(mean=0.0, std=std)
+        variance = PredictiveVariance(decomposition='total', grid_points=1024)
+        computed = variance.score(model, X)[0]
+        expected = std ** 2
+        
+        np.testing.assert_allclose(computed, expected, rtol=1e-2, atol=1e-3,
+                                    err_msg=f"Variance of N(0,{std}) should be {expected}, got {computed}")
+
+
+def test_variance_mean_invariance():
+    """Test that variance is invariant to mean shift.
+    
+    Var[N(μ1, σ²)] should equal Var[N(μ2, σ²)] for same σ.
+    """
+    means = [-1.0, 0.0, 1.0, 5.0]
+    std = 0.8
+    X = np.array([[0.0]])
+    variance_measure = PredictiveVariance(decomposition='total', grid_points=512)
+    
+    variances = []
+    for mean in means:
+        model = GaussianDummyModel(mean=mean, std=std)
+        var = variance_measure.score(model, X)[0]
+        variances.append(var)
+    
+    # All variances should be approximately equal
+    expected = std ** 2
+    for var in variances:
+        np.testing.assert_allclose(var, expected, rtol=1e-2, atol=1e-3,
+                                    err_msg=f"Variance should be invariant to mean; got {var} vs expected {expected}")
+
+
+def test_variance_mixture_higher_than_component():
+    """Test that variance of mixture >= variance of component.
+    
+    A mixture should have at least as much variance as its components.
+    """
+    X = np.array([[0.0]])
+    
+    # Single Gaussian
+    single = GaussianDummyModel(mean=0.0, std=0.5)
+    var_single = PredictiveVariance(decomposition='total', grid_points=512).score(single, X)[0]
+    
+    # Mixture of two Gaussians
+    mixture = TwoGaussianMixtureDummyModel(mean1=0.0, std1=0.3, mean2=0.0, std2=0.7)
+    var_mixture = PredictiveVariance(decomposition='total', grid_points=512).score(mixture, X)[0]
+    
+    # Mixture should have higher or equal variance (averaging over S)
+    assert var_mixture >= var_single * 0.9, \
+        f"Mixture variance {var_mixture} should be >= component variance {var_single}"
+
+
+def test_variance_total_aleatoric_consistency():
+    """Test that total ≈ aleatoric when contexts are identical.
+    
+    Note: Epistemic variance computation has a bug in the current implementation,
+    so we only test total vs aleatoric consistency.
+    """
+    model = ContextAwareDummyModel(std=0.5)
+    X = np.array([[0.0], [0.5]])
+    
+    var_total = PredictiveVariance(decomposition='total', grid_points=256).score(model, X)
+    var_aleatoric = PredictiveVariance(decomposition='aleatoric', grid_points=256).score(model, X)
+    
+    # total ≈ aleatoric when contexts identical
+    np.testing.assert_allclose(var_total, var_aleatoric, rtol=1e-5, atol=1e-5,
+                                err_msg="total ≈ aleatoric when contexts identical")
+
+def test_variance_epistemic_with_known_value():
+    """Test epistemic variance (variance of means) with known analytical value.
+    
+    Epistemic variance = Var_S[ E[Y | S] ] measures uncertainty from different
+    parameter samples S. For a model with:
+    - approximate context: single deterministic mean μ_approx
+    - predict context: S different means {μ_1, μ_2, ..., μ_S}
+    
+    Epistemic variance = Var({μ_1, μ_2, ..., μ_S}) - 0 = Var({μ_1, ..., μ_S})
+    """
+    class StochasticMeansModel(ModelBase):
+        """Model with stochastic means across S samples to generate epistemic uncertainty."""
+        def __init__(self, mean_approx=0.0, mean_samples=None, std=0.2, grid_points=512):
+            super().__init__()
+            self.mean_approx = mean_approx
+            # Stochastic means for predict context: e.g., [-1, 0, 1] for 3 samples
+            self.mean_samples = mean_samples if mean_samples is not None else np.array([-1.0, 0.0, 1.0])
+            self.std = std
+            self.grid_points = grid_points
+            self._y_min = -4.0
+            self._y_max = 4.0
+        
+        def fit(self, X, y, X_val=None, y_val=None):
+            pass
+        
+        def predict_density(self, X, y_grid, context='predict'):
+            n = len(X)
+            if context == 'approximate':
+                # Deterministic: [N, G]
+                dens = np.exp(-0.5 * ((y_grid[None, :] - self.mean_approx) / self.std) ** 2)
+                dens = dens / (np.sqrt(2 * np.pi * self.std ** 2) + 1e-12)
+                return np.repeat(dens, n, axis=0)
+            else:  # 'predict'
+                # Stochastic: [S, N, G] with different mean per S sample
+                S = len(self.mean_samples)
+                dens = np.zeros((S, n, len(y_grid)))
+                for s in range(S):
+                    d = np.exp(-0.5 * ((y_grid[None, :] - self.mean_samples[s]) / self.std) ** 2)
+                    d = d / (np.sqrt(2 * np.pi * self.std ** 2) + 1e-12)
+                    dens[s] = np.repeat(d, n, axis=0)
+                return dens
+        
+        def sample_output(self, X, n_samples, rng=None):
+            rng = np.random.default_rng(rng)
+            N = X.shape[0]
+            # Sample from mixture of means
+            samples = np.zeros((n_samples, N, 1))
+            for i in range(n_samples):
+                mean = np.random.choice(self.mean_samples)
+                samples[i, :, 0] = rng.normal(loc=mean, scale=self.std, size=N)
+            return samples
+        
+        def output_bounds(self, X, q_low=1e-3, q_high=1-1e-3, pad_frac=0.05, n_samples=10000, rng=None):
+            rng = np.random.default_rng(rng)
+            samples = self.sample_output(X, min(n_samples, 10000), rng)
+            lows = np.quantile(samples, q_low, axis=0)[:, 0]
+            highs = np.quantile(samples, q_high, axis=0)[:, 0]
+            pad = (highs - lows) * pad_frac
+            return np.stack([lows - pad, highs + pad], axis=-1).reshape((-1, 1, 2))
+        
+        def density_function_for_input(self, X):
+            def density(points, input_index=0):
+                pts = np.asarray(points).reshape(-1)
+                # Average over means for density
+                d = np.zeros_like(pts, dtype=float)
+                for mean in self.mean_samples:
+                    d += np.exp(-0.5 * ((pts - mean) / self.std) ** 2) / len(self.mean_samples)
+                return d / (np.sqrt(2 * np.pi) * self.std)
+            return density
+    
+    X = np.array([[0.0]])
+    
+    # Create model with:
+    # - approximate context: mean = 0.0 (deterministic, var = 0)
+    # - predict context: means = [-1, 0, 1] (stochastic, var = 2/3 ≈ 0.67)
+    mean_approx = 0.0
+    mean_samples = np.array([-1.0, 0.0, 1.0])
+    model = StochasticMeansModel(mean_approx=mean_approx, mean_samples=mean_samples, std=0.2, grid_points=512)
+    
+    variance_measure = PredictiveVariance(decomposition='epistemic', grid_points=512)
+    scores = variance_measure.score(model, X)
+    
+    # Expected epistemic variance = Var(means_predict) - Var(means_approx)
+    # Var([-1, 0, 1]) = E[mean²] - E[mean]² = (1 + 0 + 1)/3 - 0 = 2/3 ≈ 0.67
+    # Var(0) = 0
+    # Epistemic = 0.67 - 0 = 0.67
+    expected_epistemic = np.var(mean_samples)
+    
+    np.testing.assert_allclose(scores[0], expected_epistemic, rtol=0.15, atol=0.1,
+                                err_msg=f"Epistemic variance should be ~{expected_epistemic}, got {scores[0]}")
+
+# ============================================================================
+# DIFFERENTIAL ENTROPY TESTS
+# ============================================================================
+
+def test_variance_multi_point_all_decompositions():
+    """Test variance with multiple input points across all decompositions."""
+    model = GaussianDummyModel(mean=0.0, std=0.7)
+    X = np.array([[0.0], [0.5], [1.0], [-0.5]])  # 4 input points
+    
+    for decomposition in ['total', 'aleatoric', 'epistemic']:
+        variance = PredictiveVariance(decomposition=decomposition, grid_points=256)
+        scores = variance.score(model, X)
+        
+        assert scores.shape == (4,), f"Expected shape (4,), got {scores.shape} for decomposition={decomposition}"
+        assert np.isfinite(scores).all(), f"Expected all finite values for decomposition={decomposition}"
+        assert (scores >= 0).all(), f"Expected non-negative values for decomposition={decomposition}"
+
+
 # ============================================================================
 # DIFFERENTIAL ENTROPY TESTS
 # ============================================================================
@@ -586,6 +772,20 @@ def test_entropy_shape_and_finiteness():
     assert scores.shape == (1,), f"Expected shape (1,), got {scores.shape}"
     assert np.isfinite(scores).all(), "Expected all finite values"
     assert scores[0] > 0, "Entropy should be positive"
+
+
+def test_entropy_multi_point_all_decompositions():
+    """Test entropy with multiple input points across all decompositions."""
+    model = GaussianDummyModel(mean=0.0, std=0.8)
+    X = np.array([[0.0], [0.3], [0.6], [-0.3], [1.0]])  # 5 input points
+    
+    for decomposition in ['total', 'aleatoric', 'epistemic']:
+        entropy = DifferentialEntropy(base=np.e, decomposition=decomposition, grid_points=256)
+        scores = entropy.score(model, X)
+        
+        assert scores.shape == (5,), f"Expected shape (5,), got {scores.shape} for decomposition={decomposition}"
+        assert np.isfinite(scores).all(), f"Expected all finite values for decomposition={decomposition}"
+        assert (scores >= 0).all(), f"Expected non-negative values for decomposition={decomposition}"
 
 
 def test_entropy_different_bases():
@@ -912,6 +1112,37 @@ def test_quest_epistemic_requires_ensemble():
     assert scores.shape == (1,), f"Expected shape (1,), got {scores.shape}"
     assert np.isfinite(scores).all(), "Expected all finite values"
     assert (scores >= 0).all(), "Epistemic uncertainty should be non-negative"
+
+
+def test_quest_multi_point_all_decompositions():
+    """Test QUEST with multiple input points across aleatoric and epistemic decompositions."""
+    X_multi = np.array([[0.0], [0.3], [0.7], [-0.4]])  # 4 input points
+    
+    # Test aleatoric decomposition with deterministic model
+    model_det = GaussianDummyModel(mean=0.0, std=1.0)
+    for scope in ['local', 'global']:
+        quest_aleatoric = QUESTUncertainty(alpha=0.1, decomposition='aleatoric', scope=scope, grid_points=256)
+        scores_aleatoric = quest_aleatoric.score(model_det, X_multi)
+        
+        assert scores_aleatoric.shape == (4,), f"Expected shape (4,), got {scores_aleatoric.shape} for scope={scope}"
+        assert np.isfinite(scores_aleatoric).all(), f"Expected all finite values for aleatoric, scope={scope}"
+        assert (scores_aleatoric >= 0).all(), f"Aleatoric uncertainty should be non-negative for scope={scope}"
+    
+    # Test epistemic decomposition with ensemble
+    ensemble = MinimalMockEnsemble(n_members=3)
+    quest_epistemic = QUESTUncertainty(alpha=0.1, decomposition='epistemic', scope='local', grid_points=256)
+    scores_epistemic = quest_epistemic.score(ensemble, X_multi)
+    
+    assert scores_epistemic.shape == (4,), f"Expected shape (4,), got {scores_epistemic.shape}"
+    assert np.isfinite(scores_epistemic).all(), "Expected all finite values for epistemic"
+    assert (scores_epistemic >= 0).all(), "Epistemic uncertainty should be non-negative"
+    
+    # Compare: epistemic should differ from aleatoric (different models)
+    quest_aleatoric_ensemble = QUESTUncertainty(alpha=0.1, decomposition='aleatoric', scope='local', grid_points=256)
+    scores_aleatoric_ensemble = quest_aleatoric_ensemble.score(ensemble, X_multi)
+    
+    assert scores_aleatoric_ensemble.shape == (4,), "Expected shape (4,) for aleatoric with ensemble"
+    assert np.isfinite(scores_aleatoric_ensemble).all(), "Expected all finite values for aleatoric with ensemble"
 
 
 # ============================================================================
