@@ -20,23 +20,20 @@
   }
   ,
   "model": {
-    "name": "mdn",
+    "name": "ensemble",
   "params": {
-    "hidden_dim" : 50,
-          "n_gaussians" : 2,
-    "epochs" : 1,
-    "lr" : 1e-5,
-    "weight_decay" : 1e-4
+    "base_model" : "condgmm",
+          "n_members" : 2
   },
     "inferential_choice": {
       "predict": "posterior_predictive",         
-      "approximate": "posterior_predictive",   
+      "approximate": "point_estimate",   
       "point_estimate_criterion": "mle" 
       }
   },
   "uncertainty": {
   "measures": [
-    { "name": "alpha_volume", "params": { "decomposition": "total",     "label": "alpha_volume_total_32%" , "alpha":0.32} }
+    { "name": "alpha_volume", "params": { "decomposition": "total",     "label": "alpha_volume_total_32%" , "alpha":0.32, "mc_n_samples":100} }
   ]
 },
   "correlation": {

@@ -13,8 +13,9 @@ from ..datasets.synthetic_constant_var import SyntheticConstantVarDataset
 
 from ..pgt.conditional_kde import ConditionalKDE
 
-from ..models.mdn import MixtureDensityModel
-# from ..models.ensemble import Ensemble
+# from ..models.mdn import MixtureDensityModel
+from ..models.ensemble import Ensemble
+from ..models.condGMM import CondGMM
 # from ..models.bnn_vi import BayesianNNVI
 # from ..models.gp import GaussianProcessModel
 
