@@ -31,9 +31,17 @@ from predictive import GridDensity1D
 from measures import (
     variance_au, variance_eu, variance_tu,
     entropy_au, entropy_eu, entropy_tu,
+    # Oracle versions
     quest_au_local, quest_au_global,
     quest_eu_local, quest_eu_global,
     quest_tu_local, quest_tu_global,
+    # C2 plug-in
+    quest_au_local_c2, quest_au_global_c2,
+    quest_tu_local_c2, quest_tu_global_c2,
+    quest_eu_local_c2, quest_eu_global_c2,
+    # C3 plug-in
+    quest_tu_local_c3, quest_tu_global_c3,
+    quest_eu_local_c3, quest_eu_global_c3,
 )
 
 
@@ -99,10 +107,29 @@ def compute_all_measures(
     X_test: np.ndarray,
     noise_dist: str,
     noise_scale: float,
+    estimator: str = "oracle",
     n_alpha_global: int = 30,
     verbose: bool = False,
 ) -> list[TestPointMeasures]:
-    """Compute all UMs for every test point."""
+    """Compute all UMs for every test point.
+    
+    Args:
+        estimator: which mode to use for QUEST AU/EU/TU computations.
+            - "oracle": use the known true conditional density p_theta_star.
+                AU = V_alpha(p_theta_star), EU = V_alpha(q) (parameter HDR),
+                TU = V_alpha(p_theta_star) / (1 - TVD(p*_alpha, p_hat_alpha)).
+            - "c2":  predicting model = ensemble member w; truth approx = bar_p.
+                AU = E_w[V_alpha(p_w)], TU = E_w[V_alpha(p_w) / (1 - TVD(p_w, bar_p))],
+                EU = TU - AU. (No requires for true density.)
+            - "c3":  both predicting and truth approx are sampled from posterior.
+                AU = E_w[V_alpha(p_w)], TU = E_{w, w_tilde != w}[...], EU = TU - AU.
+    
+    The non-QUEST measures (variance, entropy) don't depend on the estimator.
+    """
+    if estimator not in {"oracle", "c2", "c3"}:
+        raise ValueError(f"Unknown estimator: {estimator!r} "
+                         "(must be 'oracle', 'c2', or 'c3')")
+    
     results = []
     n_test = X_test.shape[0]
     
@@ -112,30 +139,50 @@ def compute_all_measures(
         
         x = X_test[i]
         pred = ensemble.predictive_distribution(x)
-        true_dist = make_true_density(x, noise_dist, noise_scale)
-        theta_samples = ensemble.parameter_samples(x)
         
         m = TestPointMeasures()
         
+        # Variance and entropy: same regardless of estimator
         m.var_au = variance_au(pred)
         m.var_eu = variance_eu(pred)
         m.var_tu = variance_tu(pred)
-        
         m.ent_au = entropy_au(pred)
         m.ent_tu = entropy_tu(pred)
         m.ent_eu = m.ent_tu - m.ent_au
         
-        m.quest_au_01 = quest_au_local(true_dist, alpha=0.1)
-        m.quest_eu_01 = quest_eu_local(theta_samples, alpha=0.1)
-        m.quest_tu_01 = quest_tu_local(true_dist, pred, alpha=0.1)
-        
-        m.quest_au_05 = quest_au_local(true_dist, alpha=0.5)
-        m.quest_eu_05 = quest_eu_local(theta_samples, alpha=0.5)
-        m.quest_tu_05 = quest_tu_local(true_dist, pred, alpha=0.5)
-        
-        m.quest_au_g = quest_au_global(true_dist, n_alpha=n_alpha_global)
-        m.quest_eu_g = quest_eu_global(theta_samples, n_alpha=n_alpha_global)
-        m.quest_tu_g = quest_tu_global(true_dist, pred, n_alpha=n_alpha_global)
+        # QUEST: dispatch on estimator
+        if estimator == "oracle":
+            true_dist = make_true_density(x, noise_dist, noise_scale)
+            theta_samples = ensemble.parameter_samples(x)
+            m.quest_au_01 = quest_au_local(true_dist, alpha=0.1)
+            m.quest_eu_01 = quest_eu_local(theta_samples, alpha=0.1)
+            m.quest_tu_01 = quest_tu_local(true_dist, pred, alpha=0.1)
+            m.quest_au_05 = quest_au_local(true_dist, alpha=0.5)
+            m.quest_eu_05 = quest_eu_local(theta_samples, alpha=0.5)
+            m.quest_tu_05 = quest_tu_local(true_dist, pred, alpha=0.5)
+            m.quest_au_g = quest_au_global(true_dist, n_alpha=n_alpha_global)
+            m.quest_eu_g = quest_eu_global(theta_samples, n_alpha=n_alpha_global)
+            m.quest_tu_g = quest_tu_global(true_dist, pred, n_alpha=n_alpha_global)
+        elif estimator == "c2":
+            m.quest_au_01 = quest_au_local_c2(pred, alpha=0.1)
+            m.quest_tu_01 = quest_tu_local_c2(pred, alpha=0.1)
+            m.quest_eu_01 = m.quest_tu_01 - m.quest_au_01
+            m.quest_au_05 = quest_au_local_c2(pred, alpha=0.5)
+            m.quest_tu_05 = quest_tu_local_c2(pred, alpha=0.5)
+            m.quest_eu_05 = m.quest_tu_05 - m.quest_au_05
+            m.quest_au_g = quest_au_global_c2(pred, n_alpha=n_alpha_global)
+            m.quest_tu_g = quest_tu_global_c2(pred, n_alpha=n_alpha_global)
+            m.quest_eu_g = m.quest_tu_g - m.quest_au_g
+        elif estimator == "c3":
+            m.quest_au_01 = quest_au_local_c2(pred, alpha=0.1)  # AU same as C2
+            m.quest_tu_01 = quest_tu_local_c3(pred, alpha=0.1)
+            m.quest_eu_01 = m.quest_tu_01 - m.quest_au_01
+            m.quest_au_05 = quest_au_local_c2(pred, alpha=0.5)
+            m.quest_tu_05 = quest_tu_local_c3(pred, alpha=0.5)
+            m.quest_eu_05 = m.quest_tu_05 - m.quest_au_05
+            m.quest_au_g = quest_au_global_c2(pred, n_alpha=n_alpha_global)
+            m.quest_tu_g = quest_tu_global_c3(pred, n_alpha=n_alpha_global)
+            m.quest_eu_g = m.quest_tu_g - m.quest_au_g
         
         results.append(m)
     
@@ -203,6 +250,7 @@ def run_single_seed(
     batch_size: int,
     lr: float,
     coverages: np.ndarray,
+    estimator: str = "oracle",
     device: str = "cpu",
 ) -> dict:
     """Run the experiment for a single seed."""
@@ -231,7 +279,8 @@ def run_single_seed(
     test_mse = float(((test_pred_means - y_test) ** 2).mean())
     
     measures = compute_all_measures(
-        ensemble, X_test, noise_dist, noise_scale, verbose=False,
+        ensemble, X_test, noise_dist, noise_scale,
+        estimator=estimator, verbose=False,
     )
     ums = all_um_arrays(measures)
     
@@ -308,6 +357,7 @@ def run_experiment(
     n_jobs: int,
     output_dir: str,
     n_coverage_points: int,
+    estimator: str = "oracle",
     device: str = "cpu",
 ) -> dict:
     """Run the full multi-seed experiment for a given noise setting."""
@@ -315,7 +365,7 @@ def run_experiment(
     print("=" * 60)
     print(f"Experiment: Friedman #1 with {noise_dist} noise (scale={noise_scale})")
     print(f"  n_train={n_train}, n_test={n_test}, M={M}, epochs={n_epochs}")
-    print(f"  n_seeds={n_seeds}, n_jobs={n_jobs}")
+    print(f"  n_seeds={n_seeds}, n_jobs={n_jobs}, estimator={estimator}")
     print("=" * 60)
     
     coverages = np.linspace(0.05, 1.0, n_coverage_points)
@@ -331,7 +381,7 @@ def run_experiment(
             res = run_single_seed(
                 s, noise_dist, noise_scale, n_train, n_test, M,
                 n_epochs, hidden_dim, n_hidden, batch_size, lr,
-                coverages, device,
+                coverages, estimator=estimator, device=device,
             )
             per_seed_results.append(res)
             print(f"    Seed {s} took {time.time() - t_seed:.1f}s "
@@ -342,7 +392,7 @@ def run_experiment(
             delayed(run_single_seed)(
                 s, noise_dist, noise_scale, n_train, n_test, M,
                 n_epochs, hidden_dim, n_hidden, batch_size, lr,
-                coverages, device,
+                coverages, estimator=estimator, device=device,
             ) for s in seeds
         )
     
@@ -362,6 +412,7 @@ def run_experiment(
         "coverages": coverages,
         "noise_dist": noise_dist,
         "noise_scale": noise_scale,
+        "estimator": estimator,
         "n_seeds": agg["n_seeds"],
         "test_mse_mean": agg["test_mse_mean"],
         "test_mse_se": agg["test_mse_se"],
@@ -372,7 +423,7 @@ def run_experiment(
         save_dict[f"aurc_mean_{name}"] = agg["aurc_mean"][name]
         save_dict[f"aurc_se_{name}"] = agg["aurc_se"][name]
     
-    out_file = output_path / f"results_{noise_dist}.npz"
+    out_file = output_path / f"results_{noise_dist}_{estimator}.npz"
     np.savez(out_file, **save_dict)
     print(f"  Aggregated results saved to {out_file}")
     
@@ -404,6 +455,13 @@ def main():
     parser.add_argument("--noise", type=str, default="all",
                         choices=["gaussian", "t5", "t3", "all"])
     parser.add_argument("--noise-scale", type=float, default=1.0)
+    parser.add_argument("--estimator", type=str, default="oracle",
+                        choices=["oracle", "c2", "c3", "all"],
+                        help="Estimator mode for QUEST AU/EU/TU. "
+                             "'oracle' uses the true conditional density (synthetic data only). "
+                             "'c2' uses ensemble components vs the predictive average. "
+                             "'c3' uses ensemble components vs each other (leave-one-out style). "
+                             "'all' runs each estimator separately.")
     parser.add_argument("--n-train", type=int, default=1000)
     parser.add_argument("--n-test", type=int, default=500)
     parser.add_argument("--M", type=int, default=5)
@@ -426,25 +484,32 @@ def main():
     else:
         noise_dists = [args.noise]
     
-    for nd in noise_dists:
-        run_experiment(
-            noise_dist=nd,
-            noise_scale=args.noise_scale,
-            n_train=args.n_train,
-            n_test=args.n_test,
-            M=args.M,
-            n_epochs=args.n_epochs,
-            hidden_dim=args.hidden_dim,
-            n_hidden=args.n_hidden,
-            batch_size=args.batch_size,
-            lr=args.lr,
-            n_seeds=args.n_seeds,
-            base_seed=args.base_seed,
-            n_jobs=args.n_jobs,
-            n_coverage_points=args.n_coverage_points,
-            output_dir=args.output_dir,
-            device=args.device,
-        )
+    if args.estimator == "all":
+        estimators = ["oracle", "c2", "c3"]
+    else:
+        estimators = [args.estimator]
+    
+    for est in estimators:
+        for nd in noise_dists:
+            run_experiment(
+                noise_dist=nd,
+                noise_scale=args.noise_scale,
+                n_train=args.n_train,
+                n_test=args.n_test,
+                M=args.M,
+                n_epochs=args.n_epochs,
+                hidden_dim=args.hidden_dim,
+                n_hidden=args.n_hidden,
+                batch_size=args.batch_size,
+                lr=args.lr,
+                n_seeds=args.n_seeds,
+                base_seed=args.base_seed,
+                n_jobs=args.n_jobs,
+                n_coverage_points=args.n_coverage_points,
+                estimator=est,
+                output_dir=args.output_dir,
+                device=args.device,
+            )
     
     print("\n" + "=" * 60)
     print("All experiments complete. Results saved to:", args.output_dir)

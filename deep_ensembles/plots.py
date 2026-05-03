@@ -28,6 +28,7 @@ UM_PLOT_SPEC = [
 def plot_mse_curves(
     results_dir: str = "results",
     output_path: str = "results/mse_coverage.pdf",
+    estimator: str = "oracle",
 ):
     """Plot selective MSE vs coverage with SE shading.
     
@@ -38,7 +39,7 @@ def plot_mse_curves(
     fig, axes = plt.subplots(1, 3, figsize=(15, 4.2), sharey=False)
     
     for ax, nd in zip(axes, noise_dists):
-        path = Path(results_dir) / f"results_{nd}.npz"
+        path = Path(results_dir) / f"results_{nd}_{estimator}.npz"
         if not path.exists():
             ax.set_title(f"{nd} (missing)")
             continue
@@ -70,6 +71,7 @@ def plot_mse_curves(
         ax.grid(True, alpha=0.3)
     
     axes[0].legend(loc="best", fontsize=8, framealpha=0.9)
+    fig.suptitle(f"Estimator: {estimator}", fontsize=10, y=1.02)
     fig.tight_layout()
     fig.savefig(output_path, bbox_inches="tight")
     print(f"Saved {output_path}")
@@ -79,6 +81,7 @@ def plot_mse_curves(
 def plot_aurc_bars(
     results_dir: str = "results",
     output_path: str = "results/aurc_bars.pdf",
+    estimator: str = "oracle",
 ):
     """Bar chart of AURC across noise settings, grouped by UM, with error bars."""
     noise_dists = ["gaussian", "t5", "t3"]
@@ -96,7 +99,7 @@ def plot_aurc_bars(
     fig, axes = plt.subplots(1, 3, figsize=(15, 4))
     
     for ax, nd in zip(axes, noise_dists):
-        path = Path(results_dir) / f"results_{nd}.npz"
+        path = Path(results_dir) / f"results_{nd}_{estimator}.npz"
         if not path.exists():
             ax.set_title(f"{nd} (missing)")
             continue
@@ -123,13 +126,14 @@ def plot_aurc_bars(
         ax.set_ylabel("AURC = $\\int$ MSE $dc$")
         ax.grid(True, axis="y", alpha=0.3)
     
+    fig.suptitle(f"Estimator: {estimator}", fontsize=10, y=1.02)
     fig.tight_layout()
     fig.savefig(output_path, bbox_inches="tight")
     print(f"Saved {output_path}")
     plt.close(fig)
 
 
-def print_aurc_table(results_dir: str = "results"):
+def print_aurc_table(results_dir: str = "results", estimator: str = "oracle"):
     """Print a LaTeX-friendly AURC summary table to stdout."""
     noise_dists = ["gaussian", "t5", "t3"]
     bar_spec = [
@@ -151,7 +155,7 @@ def print_aurc_table(results_dir: str = "results"):
     for um_key, label in bar_spec:
         print(f"{label:<28}", end="")
         for nd in noise_dists:
-            path = Path(results_dir) / f"results_{nd}.npz"
+            path = Path(results_dir) / f"results_{nd}_{estimator}.npz"
             if not path.exists():
                 print(f"{'(no data)':<22}", end="")
                 continue
@@ -166,20 +170,28 @@ def print_aurc_table(results_dir: str = "results"):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--results-dir", type=str, default="results")
+    parser.add_argument("--estimator", type=str, default="oracle",
+                        choices=["oracle", "c2", "c3", "all"])
     args = parser.parse_args()
     
     output_dir = Path(args.results_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     
-    plot_mse_curves(
-        args.results_dir,
-        str(output_dir / "mse_coverage.pdf"),
-    )
-    plot_aurc_bars(
-        args.results_dir,
-        str(output_dir / "aurc_bars.pdf"),
-    )
-    print_aurc_table(args.results_dir)
+    estimators = ["oracle", "c2", "c3"] if args.estimator == "all" else [args.estimator]
+    
+    for est in estimators:
+        print(f"\n=== Estimator: {est} ===")
+        plot_mse_curves(
+            args.results_dir,
+            str(output_dir / f"mse_coverage_{est}.pdf"),
+            estimator=est,
+        )
+        plot_aurc_bars(
+            args.results_dir,
+            str(output_dir / f"aurc_bars_{est}.pdf"),
+            estimator=est,
+        )
+        print_aurc_table(args.results_dir, estimator=est)
 
 
 if __name__ == "__main__":
