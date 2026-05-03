@@ -6,6 +6,7 @@ import scipy.integrate as integrate
 from modal_uq.models.ensemble import Ensemble
 
 @register('uncertainty','alpha_volume')
+@register('uncertainty','integrated_volume')
 class QUESTUncertainty(UncertaintyBase):
     """
     QUEST uncertainty using Highest Density Regions (HDR).
@@ -23,7 +24,7 @@ class QUESTUncertainty(UncertaintyBase):
     The epistemic component for HDR-based measures requires domain-specific analysis
     and is left as a stub for future implementation.
     """
-    def __init__(self, alpha=None, decomposition='total', scope='local', grid_points=512, y_pad=1.0, n_param_samples=20, mc_n_samples=100000, mc_random_state=None, bounds_q_low=1e-3, bounds_q_high=1.0-1e-3, bounds_pad_frac=0.05):
+    def __init__(self, alpha=None, decomposition='total', scope='local', grid_points=512, y_pad=1.0, n_param_samples=20, mc_n_samples=100000, mc_random_state=None, bounds_q_low=1e-3, bounds_q_high=1.0-1e-3, bounds_pad_frac=0.05, n_alpha=100):
     # def __init__(self, alpha, decomposition='total', grid_points=10000, y_pad=1.0, n_param_samples=20):
         assert decomposition in {'total','aleatoric','epistemic'}
         self.alpha = alpha
@@ -38,6 +39,7 @@ class QUESTUncertainty(UncertaintyBase):
         self.bounds_q_low = bounds_q_low
         self.bounds_q_high = bounds_q_high
         self.bounds_pad_frac = bounds_pad_frac
+        self.n_alpha = n_alpha
 
         if self.alpha == None and scope == 'local':
             raise ValueError("alpha must be provided for local scope.")
@@ -436,7 +438,7 @@ class QUESTUncertainty(UncertaintyBase):
             av = self.alpha_volume(density_func, sampler, bounds, X, alpha=self.alpha, n_samples=self.mc_n_samples, random_state=self.mc_random_state)
             uncert_s.append(av)
         elif self.scope == 'global':
-            iv = self.integrated_volume(density_func, sampler, bounds, X, n_alpha=100, n_samples=self.mc_n_samples, random_state=self.mc_random_state)
+            iv = self.integrated_volume(density_func, sampler, bounds, X, n_alpha=self.n_alpha, n_samples=self.mc_n_samples, random_state=self.mc_random_state)
             uncert_s.append(iv)
         return np.mean(np.stack(uncert_s, axis=0), axis=0)
 
@@ -501,7 +503,7 @@ class QUESTUncertainty(UncertaintyBase):
             av = self.alpha_volume(density_func_epistemic, sampler_epistemic, bounds, X, alpha=self.alpha, n_samples=self.mc_n_samples, random_state=self.mc_random_state)
             uncert_s.append(av)
         elif self.scope == 'global':
-            iv = self.integrated_volume(density_func_epistemic, sampler_epistemic, bounds, X, n_alpha=100, n_samples=self.mc_n_samples, random_state=self.mc_random_state)
+            iv = self.integrated_volume(density_func_epistemic, sampler_epistemic, bounds, X, n_alpha=self.n_alpha, n_samples=self.mc_n_samples, random_state=self.mc_random_state)
             uncert_s.append(iv)
         return np.mean(np.stack(uncert_s, axis=0), axis=0)
 

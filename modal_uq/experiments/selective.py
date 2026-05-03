@@ -1,6 +1,7 @@
 
 import os
 import numpy as np
+import pandas as pd
 from .base import ExperimentBase
 from ..analysis.correlation import compute_uncertainty_scores, correlation_suite, save_correlation_artifacts
 from ..metrics.selective import risk_coverage, aurc
@@ -68,9 +69,11 @@ class SelectivePrediction(ExperimentBase):
             # Run selective analysis and save AUROC-style (risk vs % abstention) plots
             print("Running selective analysis...")
             try:
-                ts = datetime.datetime.now().strftime("%Y%m%d_%H%M")
-                print(ts)
-                out_dir = os.path.join('runs', f"_selective\{ts}")
+                out_dir = self.cfg.get('experiment', {}).get('run_root')
+                if out_dir is None:
+                    ts = datetime.datetime.now().strftime("%Y%m%d_%H%M")
+                    print(ts)
+                    out_dir = os.path.join('runs', f"_selective\{ts}")
                 print(out_dir)
                 self.run_selective_analysis(df_scores, out_dir=out_dir)
             except Exception:
@@ -212,11 +215,37 @@ class SelectivePrediction(ExperimentBase):
         plt.close()
         return path
 
+    def _save_combined_curve_csv(self, curves_dict, metric, metric_dir):
+        rows = []
+        for measure, curve in curves_dict.items():
+            if not isinstance(curve, dict) or 'abstention' not in curve or 'risk' not in curve:
+                continue
+            order = np.argsort(curve['abstention'])
+            abstention = np.asarray(curve['abstention'])[order]
+            risk = np.asarray(curve['risk'])[order]
+            aurc = curve.get('aurc')
+            for idx, (abst, risk_value) in enumerate(zip(abstention, risk)):
+                rows.append({
+                    'metric': metric,
+                    'measure': measure,
+                    'point_index': int(idx),
+                    'abstention': float(abst),
+                    'risk': float(risk_value),
+                    'aurc': float(aurc) if aurc is not None else np.nan,
+                })
+
+        if not rows:
+            return None
+
+        csv_path = os.path.join(metric_dir, 'combined_curve_data.csv')
+        pd.DataFrame(rows).to_csv(csv_path, index=False)
+        return csv_path
+
     def run_selective_analysis(self, df_scores, metrics=None, measures=None, steps=100, out_dir=None):
         # Default metrics from config primary list
         metrics = metrics or self.cfg.get('metrics', {}).get('primary', [])
         if out_dir is None:
-            out_dir = 'runs/_selective'
+            out_dir = self.cfg.get('experiment', {}).get('run_root', 'runs/_selective')
         os.makedirs(out_dir, exist_ok=True)
         results = {}
         # Default measures: all columns in df_scores
@@ -248,8 +277,9 @@ class SelectivePrediction(ExperimentBase):
                 metric_dir = os.path.join(out_dir, safe_metric)
                 os.makedirs(metric_dir, exist_ok=True)
                 combined_png = self.plot_measures_combined(curves_dict, metric, out_dir=metric_dir)
+                combined_csv = self._save_combined_curve_csv(curves_dict, metric, metric_dir)
                 if combined_png is not None:
-                    results['_combined_by_metric'][metric] = {'png': combined_png}
+                    results['_combined_by_metric'][metric] = {'png': combined_png, 'csv': combined_csv}
             except Exception as e:
                 results['_combined_by_metric'][metric] = {'error': str(e)}
         # Save summary JSON

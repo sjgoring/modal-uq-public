@@ -2,6 +2,11 @@
 import numpy as np
 import scipy.integrate as integrate
 
+
+def _normalize_density(dens, y_grid):
+    area = integrate.trapezoid(dens, y_grid, axis=1)
+    return dens / (area[:, None] + 1e-12)
+
 def modal_absolute_error(y_true, y_mode_pred, kwargs_dict):
     return float(np.mean(np.abs(y_true - y_mode_pred)))
 
@@ -31,24 +36,24 @@ def likelihood_ratio_measure(y_true, y_mode_pred, kwargs_dict):
     if y_mode_pred.ndim > 1:
         raise ValueError("y_mode_pred suggests x is not 1D")
 
-    print("Debug - likelihood_ratio_measure input shapes:")
-    print("y_true", y_true.shape, "y_mode_pred", y_mode_pred.shape, "true_dens", true_dens.shape, "est_dens", est_dens.shape, "y_grid", y_grid.shape)
+    # print("Debug - likelihood_ratio_measure input shapes:")
+    # print("y_true", y_true.shape, "y_mode_pred", y_mode_pred.shape, "true_dens", true_dens.shape, "est_dens", est_dens.shape, "y_grid", y_grid.shape)
 
     # Debug: Checking y_true and y_mode_pred against argmax of true_dens and est_dens respectively.
-    print("Debug - Checking y_true and y_mode_pred against argmax of true_dens and est_dens respectively.")
-    print("true_dens correct", np.equal(y_true, y_grid[true_dens.argmax(axis=1)]))
-    print("est_dens correct", np.equal(y_mode_pred, y_grid[est_dens.argmax(axis=1)]))
-    print("Todo: Complete this debugging.")
+    # print("Debug - Checking y_true and y_mode_pred against argmax of true_dens and est_dens respectively.")
+    # print("true_dens correct", np.equal(y_true, y_grid[true_dens.argmax(axis=1)]))
+    # print("est_dens correct", np.equal(y_mode_pred, y_grid[est_dens.argmax(axis=1)]))
+    # print("Todo: Complete this debugging.")
     # quit()
-    # normalise incoming densities as empirical probabilities
-    true_dens = true_dens / (true_dens.sum(axis=1)[:, None] + 1e-12)
-    est_dens = est_dens / (est_dens.sum(axis=1)[:, None] + 1e-12)
+    # Normalise densities with respect to the grid spacing.
+    true_dens = _normalize_density(true_dens, y_grid)
+    est_dens = _normalize_density(est_dens, y_grid)
 
     if reference_dist == "true":
         # relative likelihood of y^ against y* under p*. That is, p*(y^) / p*(y*).
         p_ystar = true_dens[np.arange(len(y_true)), np.abs(y_grid[None,:] - y_true[:,None]).argmin(axis=1)]
         p_yhat = true_dens[np.arange(len(y_true)), np.abs(y_grid[None,:] - y_mode_pred[:,None]).argmin(axis=1)]
-        print("Debug - likelihood_ratio_measure p_ystar < p_hat?", np.mean(p_ystar < p_yhat))
+        # print("Debug - likelihood_ratio_measure p_ystar < p_hat?", np.mean(p_ystar < p_yhat))
         return float(np.mean(p_yhat / (p_ystar + 1e-12)))
     elif reference_dist == "est":
         # relative likelihood of y* against y^ under p^. That is, p^(y*) / p^(y^).
@@ -82,9 +87,9 @@ def modal_coverage_measure(y_true, y_mode_pred, kwargs_dict):
     print("Debug - coverage_measure input shapes:")
     print("y_true", y_true.shape, "y_mode_pred", y_mode_pred.shape, "true_dens", true_dens.shape, "est_dens", est_dens.shape, "y_grid", y_grid.shape)
 
-    # normalise incoming densities as empirical densities (not probabilities), via trapezoidal rule
-    true_dens = true_dens / (true_dens.sum(axis=1)[:, None] + 1e-12)
-    est_dens = est_dens / (est_dens.sum(axis=1)[:, None] + 1e-12)
+    # Normalise densities with respect to the grid spacing.
+    true_dens = _normalize_density(true_dens, y_grid)
+    est_dens = _normalize_density(est_dens, y_grid)
 
     if reference_dist == "est":
         # take the integral of all density values where the estimated density of y is greater than the estimated density of y*.
