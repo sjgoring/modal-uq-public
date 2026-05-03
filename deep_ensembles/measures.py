@@ -71,6 +71,67 @@ def entropy_eu(predictive: GaussianMixture1D, n_grid: int = 5000) -> float:
 
 # ==================== QUEST measures ====================
 
+def _v_alpha_and_tvd(
+    p_dist,
+    q_dist,
+    alpha: float,
+    n_grid: int = 5000,
+) -> tuple[float, float]:
+    """Compute V_alpha(p) and TVD(p_alpha, q_alpha) on a shared grid.
+    
+    p_alpha is the conditional density of p restricted to its (1-alpha)-HDR;
+    similarly for q_alpha. Both are extended by zero to the shared grid so
+    TVD is well-defined even when HDRs are disjoint.
+    
+    Returns:
+        (V_alpha_p, tvd_pq): V_alpha of p, and TVD between conditionals.
+    """
+    def _get_grid(dist):
+        # GaussianMixture1D.grid(n_grid=...) and GridDensity1D.grid() differ
+        try:
+            return dist.grid(n_grid=n_grid)
+        except TypeError:
+            return dist.grid()
+    
+    p_grid = _get_grid(p_dist)
+    q_grid = _get_grid(q_dist)
+    
+    y_min = min(p_grid[0], q_grid[0])
+    y_max = max(p_grid[-1], q_grid[-1])
+    y_grid = np.linspace(y_min, y_max, n_grid)
+    dy = y_grid[1] - y_grid[0]
+    
+    p_density = p_dist.density(y_grid)
+    q_density = q_dist.density(y_grid)
+    
+    v_p, mask_p, _ = compute_hdr_on_grid(p_density, dy, alpha=alpha)
+    _, mask_q, _ = compute_hdr_on_grid(q_density, dy, alpha=alpha)
+    
+    p_hdr_mass = float(np.trapz(np.where(mask_p, p_density, 0), y_grid))
+    q_hdr_mass = float(np.trapz(np.where(mask_q, q_density, 0), y_grid))
+    
+    if p_hdr_mass < 1e-12 or q_hdr_mass < 1e-12:
+        return v_p, 1.0 - 1e-10
+    
+    p_alpha = np.where(mask_p, p_density / p_hdr_mass, 0.0)
+    q_alpha = np.where(mask_q, q_density / q_hdr_mass, 0.0)
+    
+    tvd = 0.5 * float(np.trapz(np.abs(p_alpha - q_alpha), y_grid))
+    tvd = min(max(tvd, 0.0), 1.0 - 1e-10)
+    
+    return v_p, tvd
+
+
+def _component_distribution(predictive: GaussianMixture1D, m: int) -> GaussianMixture1D:
+    """Extract the m-th component of an ensemble predictive as a single-component dist."""
+    return GaussianMixture1D(
+        mus=np.array([predictive.mus[m]]),
+        sigmas=np.array([predictive.sigmas[m]]),
+    )
+
+
+# ----- Oracle versions (use known true conditional density p_theta_star) -----
+
 def quest_au_local(true_dist, alpha: float) -> float:
     """Local AU: V_alpha of the true conditional density."""
     volume, _, _ = compute_hdr(true_dist, alpha=alpha)
@@ -83,58 +144,122 @@ def quest_tu_local(
     alpha: float,
     n_grid: int = 5000,
 ) -> float:
-    """Local TU: V_alpha(p_theta_star) / (1 - TVD(p_alpha_star, p_alpha_hat)).
-    
-    p_alpha_star is the true density conditioned on the true HDR.
-    p_alpha_hat is the predictive density conditioned on the predictive HDR.
-    
-    Both conditional densities are extended by zero to a common grid covering
-    both supports, so TVD is well-defined even when HDRs are disjoint.
-    """
-    # Construct a common grid that covers both true and predictive supports.
-    # Get tentative grids from each and take the union range.
-    pred_grid = predictive.grid(n_grid=n_grid)
-    
-    # If true_dist provides its own grid, use its range too
-    if hasattr(true_dist, 'grid') and callable(true_dist.grid):
-        try:
-            true_grid = true_dist.grid(n_grid=n_grid)
-        except TypeError:
-            true_grid = true_dist.grid()
-        y_min = min(pred_grid[0], true_grid[0])
-        y_max = max(pred_grid[-1], true_grid[-1])
-    else:
-        y_min, y_max = pred_grid[0], pred_grid[-1]
-    
-    y_grid = np.linspace(y_min, y_max, n_grid)
-    dy = y_grid[1] - y_grid[0]
-    
-    # Evaluate both densities on the common grid
-    true_density = true_dist.density(y_grid)
-    pred_density = predictive.density(y_grid)
-    
-    # Compute HDR masks on the common grid
-    v_true, mask_true_grid, _ = compute_hdr_on_grid(true_density, dy, alpha=alpha)
-    _, mask_pred_grid, _ = compute_hdr_on_grid(pred_density, dy, alpha=alpha)
-    
-    # Conditional densities (extended by zero to common grid)
-    # Note: we need to renormalize by the actual mass within each HDR on this grid,
-    # not just (1 - alpha), to handle grid discretization correctly.
-    true_hdr_mass = float(np.trapz(np.where(mask_true_grid, true_density, 0), y_grid))
-    pred_hdr_mass = float(np.trapz(np.where(mask_pred_grid, pred_density, 0), y_grid))
-    
-    if true_hdr_mass < 1e-12 or pred_hdr_mass < 1e-12:
-        # Pathological case (numerical underflow)
-        return v_true * 1e12  # large but finite
-    
-    p_alpha_star = np.where(mask_true_grid, true_density / true_hdr_mass, 0.0)
-    p_alpha_hat = np.where(mask_pred_grid, pred_density / pred_hdr_mass, 0.0)
-    
-    # TVD between the two conditional densities
-    tvd = 0.5 * float(np.trapz(np.abs(p_alpha_star - p_alpha_hat), y_grid))
-    tvd = min(max(tvd, 0.0), 1.0 - 1e-10)
-    
+    """Oracle local TU: V_alpha(p_theta_star) / (1 - TVD(p_alpha_star, p_alpha_hat))."""
+    v_true, tvd = _v_alpha_and_tvd(true_dist, predictive, alpha, n_grid=n_grid)
     return v_true / (1 - tvd)
+
+
+# ----- C2 plug-in: predicting model = w, truth approx = predictive bar_p -----
+
+def quest_au_local_c2(predictive: GaussianMixture1D, alpha: float) -> float:
+    """C2 local AU: E_w[V_alpha(p_w)] = mean V_alpha across ensemble components."""
+    M = predictive.M
+    vols = np.zeros(M)
+    for m in range(M):
+        comp = _component_distribution(predictive, m)
+        v, _, _ = compute_hdr(comp, alpha=alpha)
+        vols[m] = v
+    return float(predictive.weights @ vols)
+
+
+def quest_tu_local_c2(
+    predictive: GaussianMixture1D,
+    alpha: float,
+    n_grid: int = 5000,
+) -> float:
+    """C2 local TU: E_w[V_alpha(p_w) / (1 - TVD(p_w_alpha, predictive_alpha))].
+    
+    Predicting model = each ensemble component w; truth approx = bar_p (predictive).
+    """
+    M = predictive.M
+    tu_per_w = np.zeros(M)
+    for m in range(M):
+        comp = _component_distribution(predictive, m)
+        v_w, tvd = _v_alpha_and_tvd(comp, predictive, alpha, n_grid=n_grid)
+        tu_per_w[m] = v_w / (1 - tvd)
+    return float(predictive.weights @ tu_per_w)
+
+
+def quest_eu_local_c2(predictive: GaussianMixture1D, alpha: float) -> float:
+    """C2 local EU as TU - AU (per Schweighofer framework)."""
+    return quest_tu_local_c2(predictive, alpha) - quest_au_local_c2(predictive, alpha)
+
+
+# ----- C3 plug-in: both predicting and truth-approx marginalized over posterior -----
+
+def quest_tu_local_c3(
+    predictive: GaussianMixture1D,
+    alpha: float,
+    n_grid: int = 5000,
+) -> float:
+    """C3 local TU: E_w[E_w_tilde[V_alpha(p_w) / (1 - TVD(p_w_alpha, p_w_tilde_alpha))]].
+    
+    Both predicting model and truth approximation are sampled from the posterior
+    (i.e., from ensemble components). We exclude the diagonal m == m_tilde where
+    TVD = 0 (which would inflate TU spuriously).
+    
+    Returns:
+        Average TU over all M*(M-1) ordered pairs of distinct components.
+    """
+    M = predictive.M
+    if M < 2:
+        # Fallback: degenerate ensemble, TVD undefined; return AU
+        return quest_au_local_c2(predictive, alpha)
+    
+    total = 0.0
+    n_pairs = 0
+    for m in range(M):
+        comp_m = _component_distribution(predictive, m)
+        for m_tilde in range(M):
+            if m == m_tilde:
+                continue
+            comp_mt = _component_distribution(predictive, m_tilde)
+            v_w, tvd = _v_alpha_and_tvd(comp_m, comp_mt, alpha, n_grid=n_grid)
+            # Weighted by p(m) p(m_tilde); for uniform weights this is just averaging
+            weight = predictive.weights[m] * predictive.weights[m_tilde]
+            total += weight * v_w / (1 - tvd)
+            n_pairs += 1
+    
+    # Normalize by sum of weights used (excludes diagonal)
+    diag_weight = float(np.sum(predictive.weights ** 2))
+    off_diag_weight = 1.0 - diag_weight
+    if off_diag_weight < 1e-12:
+        return quest_au_local_c2(predictive, alpha)
+    return total / off_diag_weight
+
+
+def quest_eu_local_c3(predictive: GaussianMixture1D, alpha: float) -> float:
+    """C3 local EU as TU - AU."""
+    return quest_tu_local_c3(predictive, alpha) - quest_au_local_c2(predictive, alpha)
+
+
+# ----- Global versions of all three modes (integrate over alpha) -----
+
+def quest_au_global_c2(predictive: GaussianMixture1D, n_alpha: int = 30) -> float:
+    """C2 global AU: integral of E_w[V_alpha(p_w)] over alpha."""
+    alphas = np.linspace(0.01, 0.99, n_alpha)
+    vals = np.array([quest_au_local_c2(predictive, a) for a in alphas])
+    return float(np.trapz(vals, alphas))
+
+
+def quest_tu_global_c2(predictive: GaussianMixture1D, n_alpha: int = 30) -> float:
+    alphas = np.linspace(0.01, 0.99, n_alpha)
+    vals = np.array([quest_tu_local_c2(predictive, a) for a in alphas])
+    return float(np.trapz(vals, alphas))
+
+
+def quest_tu_global_c3(predictive: GaussianMixture1D, n_alpha: int = 30) -> float:
+    alphas = np.linspace(0.01, 0.99, n_alpha)
+    vals = np.array([quest_tu_local_c3(predictive, a) for a in alphas])
+    return float(np.trapz(vals, alphas))
+
+
+def quest_eu_global_c2(predictive: GaussianMixture1D, n_alpha: int = 30) -> float:
+    return quest_tu_global_c2(predictive, n_alpha) - quest_au_global_c2(predictive, n_alpha)
+
+
+def quest_eu_global_c3(predictive: GaussianMixture1D, n_alpha: int = 30) -> float:
+    return quest_tu_global_c3(predictive, n_alpha) - quest_au_global_c2(predictive, n_alpha)
 
 
 def compute_hdr_on_grid(
@@ -310,3 +435,40 @@ if __name__ == "__main__":
     eu_loose = quest_eu_local(loose, alpha=0.5)
     print(f"  Loose cluster (std=1.0):  EU = {eu_loose:.4f}")
     print(f"  (Loose should be substantially larger than tight.)")
+    
+    # ---------- C2 / C3 plug-in sanity checks ----------
+    print("\nC2/C3 plug-in TU sanity checks:")
+    
+    # Case 1: ensemble of identical components -> TU should equal AU
+    # (all components agree -> no spread in beliefs -> EU = 0)
+    identical = GaussianMixture1D(
+        mus=np.array([0.0, 0.0, 0.0]), sigmas=np.array([1.0, 1.0, 1.0]),
+    )
+    au_c2 = quest_au_local_c2(identical, alpha=0.5)
+    tu_c2 = quest_tu_local_c2(identical, alpha=0.5)
+    tu_c3 = quest_tu_local_c3(identical, alpha=0.5)
+    print(f"  Identical ensemble (M=3, all N(0,1)):")
+    print(f"    AU (C2) = {au_c2:.4f}, TU (C2) = {tu_c2:.4f}, TU (C3) = {tu_c3:.4f}")
+    print(f"    (All ~equal, since components agree perfectly.)")
+    
+    # Case 2: spread-out ensemble with different means -> TU > AU
+    spread = GaussianMixture1D(
+        mus=np.array([-2.0, 0.0, 2.0]), sigmas=np.array([1.0, 1.0, 1.0]),
+    )
+    au_c2 = quest_au_local_c2(spread, alpha=0.5)
+    tu_c2 = quest_tu_local_c2(spread, alpha=0.5)
+    tu_c3 = quest_tu_local_c3(spread, alpha=0.5)
+    print(f"  Spread ensemble (mus = -2, 0, 2; all sigma=1):")
+    print(f"    AU (C2) = {au_c2:.4f}, TU (C2) = {tu_c2:.4f}, TU (C3) = {tu_c3:.4f}")
+    print(f"    (TU should both exceed AU; C3 typically inflates more than C2.)")
+    
+    # Case 3: more extreme disagreement
+    extreme = GaussianMixture1D(
+        mus=np.array([-5.0, 0.0, 5.0]), sigmas=np.array([0.5, 0.5, 0.5]),
+    )
+    au_c2 = quest_au_local_c2(extreme, alpha=0.5)
+    tu_c2 = quest_tu_local_c2(extreme, alpha=0.5)
+    tu_c3 = quest_tu_local_c3(extreme, alpha=0.5)
+    print(f"  Extreme disagreement (mus = -5, 0, 5; sigma=0.5):")
+    print(f"    AU (C2) = {au_c2:.4f}, TU (C2) = {tu_c2:.4f}, TU (C3) = {tu_c3:.4f}")
+    print(f"    (TU should massively inflate AU.)")
