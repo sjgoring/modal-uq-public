@@ -7,6 +7,45 @@ def _normalize_density(dens, y_grid):
     area = integrate.trapezoid(dens, y_grid, axis=1)
     return dens / (area[:, None] + 1e-12)
 
+
+def _as_member_stack(dens):
+    dens = np.asarray(dens)
+    if dens.ndim == 2:
+        return dens[None, ...]
+    if dens.ndim == 3:
+        return dens
+    raise ValueError(f"Unsupported density shape {dens.shape}; expected [N, G] or [M, N, G].")
+
+
+def _score_likelihood_ratio_single(y_true, y_mode_pred, true_dens, est_dens, y_grid, reference_dist):
+    true_dens = _normalize_density(true_dens, y_grid)
+    est_dens = _normalize_density(est_dens, y_grid)
+
+    if reference_dist == "true":
+        p_ystar = true_dens[np.arange(len(y_true)), np.abs(y_grid[None, :] - y_true[:, None]).argmin(axis=1)]
+        p_yhat = true_dens[np.arange(len(y_true)), np.abs(y_grid[None, :] - y_mode_pred[:, None]).argmin(axis=1)]
+        return float(np.mean(p_yhat / (p_ystar + 1e-12)))
+    if reference_dist == "est":
+        p_ystar = est_dens[np.arange(len(y_true)), np.abs(y_grid[None, :] - y_true[:, None]).argmin(axis=1)]
+        p_yhat = est_dens[np.arange(len(y_true)), np.abs(y_grid[None, :] - y_mode_pred[:, None]).argmin(axis=1)]
+        return float(np.mean(p_ystar / (p_yhat + 1e-12)))
+    raise ValueError("reference_dist must be either 'true' or 'est'")
+
+
+def _score_modal_coverage_single(y_true, y_mode_pred, true_dens, est_dens, y_grid, reference_dist):
+    true_dens = _normalize_density(true_dens, y_grid)
+    est_dens = _normalize_density(est_dens, y_grid)
+
+    if reference_dist == "est":
+        indicator = (est_dens > est_dens[np.arange(len(y_true)), np.abs(y_grid[None, :] - y_true[:, None]).argmin(axis=1)][:, None]).astype(float)
+        coverage = integrate.trapezoid(est_dens * indicator, y_grid, axis=1)
+    elif reference_dist == "true":
+        indicator = (true_dens > true_dens[np.arange(len(y_true)), np.abs(y_grid[None, :] - y_mode_pred[:, None]).argmin(axis=1)][:, None]).astype(float)
+        coverage = integrate.trapezoid(true_dens * indicator, y_grid, axis=1)
+    else:
+        raise ValueError("reference_dist must be either 'true' or 'est'")
+    return float(np.mean(coverage))
+
 def modal_absolute_error(y_true, y_mode_pred, kwargs_dict):
     return float(np.mean(np.abs(y_true - y_mode_pred)))
 
@@ -35,33 +74,25 @@ def likelihood_ratio_measure(y_true, y_mode_pred, kwargs_dict):
     # Notice we assum 1D x, so:
     if y_mode_pred.ndim > 1:
         raise ValueError("y_mode_pred suggests x is not 1D")
+    true_stack = _as_member_stack(true_dens)
+    est_stack = _as_member_stack(est_dens)
+    n_members = max(true_stack.shape[0], est_stack.shape[0])
 
-    # print("Debug - likelihood_ratio_measure input shapes:")
-    # print("y_true", y_true.shape, "y_mode_pred", y_mode_pred.shape, "true_dens", true_dens.shape, "est_dens", est_dens.shape, "y_grid", y_grid.shape)
+    if true_stack.shape[0] not in {1, n_members}:
+        raise ValueError("true_dens member axis must be 1 or match est_dens.")
+    if est_stack.shape[0] not in {1, n_members}:
+        raise ValueError("est_dens member axis must be 1 or match true_dens.")
 
-    # Debug: Checking y_true and y_mode_pred against argmax of true_dens and est_dens respectively.
-    # print("Debug - Checking y_true and y_mode_pred against argmax of true_dens and est_dens respectively.")
-    # print("true_dens correct", np.equal(y_true, y_grid[true_dens.argmax(axis=1)]))
-    # print("est_dens correct", np.equal(y_mode_pred, y_grid[est_dens.argmax(axis=1)]))
-    # print("Todo: Complete this debugging.")
-    # quit()
-    # Normalise densities with respect to the grid spacing.
-    true_dens = _normalize_density(true_dens, y_grid)
-    est_dens = _normalize_density(est_dens, y_grid)
+    if true_stack.shape[0] == 1 and n_members > 1:
+        true_stack = np.repeat(true_stack, n_members, axis=0)
+    if est_stack.shape[0] == 1 and n_members > 1:
+        est_stack = np.repeat(est_stack, n_members, axis=0)
 
-    if reference_dist == "true":
-        # relative likelihood of y^ against y* under p*. That is, p*(y^) / p*(y*).
-        p_ystar = true_dens[np.arange(len(y_true)), np.abs(y_grid[None,:] - y_true[:,None]).argmin(axis=1)]
-        p_yhat = true_dens[np.arange(len(y_true)), np.abs(y_grid[None,:] - y_mode_pred[:,None]).argmin(axis=1)]
-        # print("Debug - likelihood_ratio_measure p_ystar < p_hat?", np.mean(p_ystar < p_yhat))
-        return float(np.mean(p_yhat / (p_ystar + 1e-12)))
-    elif reference_dist == "est":
-        # relative likelihood of y* against y^ under p^. That is, p^(y*) / p^(y^).
-        p_ystar = est_dens[np.arange(len(y_true)), np.abs(y_grid[None,:] - y_true[:,None]).argmin(axis=1)]
-        p_yhat = est_dens[np.arange(len(y_true)), np.abs(y_grid[None,:] - y_mode_pred[:,None]).argmin(axis=1)]
-        return float(np.mean(p_ystar / (p_yhat + 1e-12)))
-    else:
-        raise ValueError("reference_dist must be either 'true' or 'est'")
+    scores = [
+        _score_likelihood_ratio_single(y_true, y_mode_pred, true_stack[m], est_stack[m], y_grid, reference_dist)
+        for m in range(n_members)
+    ]
+    return float(np.mean(scores))
 
 def modal_coverage_measure(y_true, y_mode_pred, kwargs_dict):
     # Shapes: samples are over x, grid points are over y
@@ -83,27 +114,25 @@ def modal_coverage_measure(y_true, y_mode_pred, kwargs_dict):
     # Notice we assum 1D x, so:
     if y_mode_pred.ndim > 1:
         raise ValueError("y_mode_pred suggests x is not 1D")
+    true_stack = _as_member_stack(true_dens)
+    est_stack = _as_member_stack(est_dens)
+    n_members = max(true_stack.shape[0], est_stack.shape[0])
 
-    print("Debug - coverage_measure input shapes:")
-    print("y_true", y_true.shape, "y_mode_pred", y_mode_pred.shape, "true_dens", true_dens.shape, "est_dens", est_dens.shape, "y_grid", y_grid.shape)
+    if true_stack.shape[0] not in {1, n_members}:
+        raise ValueError("true_dens member axis must be 1 or match est_dens.")
+    if est_stack.shape[0] not in {1, n_members}:
+        raise ValueError("est_dens member axis must be 1 or match true_dens.")
 
-    # Normalise densities with respect to the grid spacing.
-    true_dens = _normalize_density(true_dens, y_grid)
-    est_dens = _normalize_density(est_dens, y_grid)
+    if true_stack.shape[0] == 1 and n_members > 1:
+        true_stack = np.repeat(true_stack, n_members, axis=0)
+    if est_stack.shape[0] == 1 and n_members > 1:
+        est_stack = np.repeat(est_stack, n_members, axis=0)
 
-    if reference_dist == "est":
-        # take the integral of all density values where the estimated density of y is greater than the estimated density of y*.
-        # first, define an indicator function for each sample and grid point, which is 1 if p^(y) > p^(y*), and 0 otherwise
-        indicator = (est_dens > est_dens[np.arange(len(y_true)), np.abs(y_grid[None,:] - y_true[:,None]).argmin(axis=1)][:,None]).astype(float)
-        # then, for each sample, take the integral of the estimated over the grid, weighted by the indicator function, to get the coverage measure
-        coverage = integrate.trapezoid(est_dens * indicator, y_grid, axis=1)
-    elif reference_dist == "true":
-        # as above but with p*, and y^.
-        indicator = (true_dens > true_dens[np.arange(len(y_true)), np.abs(y_grid[None,:] - y_mode_pred[:,None]).argmin(axis=1)][:,None]).astype(float)
-        coverage = integrate.trapezoid(true_dens * indicator, y_grid, axis=1)
-    else:
-        raise ValueError("reference_dist must be either 'true' or 'est'")
-    return float(np.mean(coverage))
+    scores = [
+        _score_modal_coverage_single(y_true, y_mode_pred, true_stack[m], est_stack[m], y_grid, reference_dist)
+        for m in range(n_members)
+    ]
+    return float(np.mean(scores))
 
 
 

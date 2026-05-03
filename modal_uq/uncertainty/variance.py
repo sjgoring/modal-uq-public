@@ -1,5 +1,6 @@
 import numpy as np
 from .base import UncertaintyBase
+from ..models.base import InferentialChoiceConfig
 from ..registry import register
 import scipy.integrate as integrate
 
@@ -10,19 +11,13 @@ class PredictiveVariance(UncertaintyBase):
 
     Uses dual inferential_choice contexts for uncertainty decomposition:
     
-    - total:      Var[Y | x] computed from predict context
-    - aleatoric:  E_θ[ Var(Y | x, θ) ] from approximate context (true DGP with known params)
-    - epistemic:  total - aleatoric (difference from approximate to predict)
+    - predict: candidate distributions, returned as [S,N,G] or [N,G]
+    - approximate: posterior predictive reference, returned as [N,G] or [S,N,G]
 
-    The approximate context represents the true data generating process with point-estimate
-    parameters (minimal epistemic uncertainty), while predict includes parameter uncertainty.
-    
-    Uses model.predict_density(X, y_grid, context='predict'|'approximate') that returns
-    either [N,G] (single density) or [S,N,G] (many densities).
-
-    Aggregation semantics:
-    - single density: score is computed directly on that density
-    - many densities: score is computed per density then averaged over S
+    Variance decompositions:
+    - total:      BMA of the squared loss around the posterior predictive mean
+    - aleatoric:  BMA of the variance measure over all predict samples
+    - epistemic:  BMA of the squared deviation of each candidate mean from the posterior predictive mean
     """
     def __init__(self, decomposition='total', grid_points=512, y_pad=1.0, n_param_samples=20):
         assert decomposition in {'total','aleatoric','epistemic'}
@@ -39,6 +34,14 @@ class PredictiveVariance(UncertaintyBase):
         Z = integrate.trapezoid(arr, y_grid, axis=-1)     # shape: [N] or [S,N]
         Z = np.expand_dims(Z, axis=-1)         # -> [N,1] or [S,N,1]
         return arr / (Z + 1e-12)
+
+    @staticmethod
+    def _posterior_predictive_density(dens):
+        """Collapse a density collection to its posterior predictive density."""
+        dens = np.asarray(dens)
+        if dens.ndim == 3:
+            return dens.mean(axis=0)
+        return dens
 
     @staticmethod
     def _moments_from_density(dens, y_grid):
@@ -60,27 +63,59 @@ class PredictiveVariance(UncertaintyBase):
         Var = Ey2 - Ey**2                                   # [N] or [S,N]
         return Ey, Var
 
+    @staticmethod
+    def _validate_inferential_choices(model):
+        cfg = model.get_inferential_choice_config()
+        predict = InferentialChoiceConfig.canonicalize_strategy(cfg.predict)
+        approximate = InferentialChoiceConfig.canonicalize_strategy(cfg.approximate)
+
+        if predict != 'bma' or approximate != 'posterior_predictive':
+            raise NotImplementedError(
+                "PredictiveVariance requires inferential choices predict='bma' and "
+                "approximate='posterior_predictive'. "
+                f"Current settings: predict='{cfg.predict}', approximate='{cfg.approximate}'."
+            )
+
     def _compute_total(self, model, X):
+        y_grid = model.default_y_grid(X, grid_points=self.grid_points, y_pad=self.y_pad)
+        dens_pred = self._predict_density_collection(model, X, y_grid, context='predict')
+        dens_approx = self._predict_density_collection(model, X, y_grid, context='approximate')
+
+        dens_ref = self._posterior_predictive_density(dens_approx)
+        Ey_ref, _ = self._moments_from_density(dens_ref, y_grid)
+
+        candidate_densities = [dens_pred, dens_approx]
+        squared_losses = []
+
+        for dens_collection in candidate_densities:
+            if dens_collection.ndim == 2:
+                dens_collection = dens_collection[None, ...]
+
+            for dens_s in dens_collection:
+                Ey_s, Var_s = self._moments_from_density(dens_s, y_grid)
+                squared_losses.append(Var_s + (Ey_s - Ey_ref) ** 2)
+
+        return np.mean(np.asarray(squared_losses), axis=0)
+
+    def _compute_aleatoric(self, model, X):
         y_grid = model.default_y_grid(X, grid_points=self.grid_points, y_pad=self.y_pad)
         dens_pred = self._predict_density_collection(model, X, y_grid, context='predict')
         _, Var_pred_s = self._moments_from_density(dens_pred, y_grid)
         return Var_pred_s.mean(axis=0)
 
-    def _compute_aleatoric(self, model, X):
-        y_grid = model.default_y_grid(X, grid_points=self.grid_points, y_pad=self.y_pad)
-        dens_approx = self._predict_density_collection(model, X, y_grid, context='approximate')
-        _, Var_approx_s = self._moments_from_density(dens_approx, y_grid)
-        return Var_approx_s.mean(axis=0)
-
     def _compute_epistemic(self, model, X):
         y_grid = model.default_y_grid(X, grid_points=self.grid_points, y_pad=self.y_pad)
         dens_pred = self._predict_density_collection(model, X, y_grid, context='predict')
+        dens_ref = self._posterior_predictive_density(
+            self._predict_density_collection(model, X, y_grid, context='approximate')
+        )
         Ey_pred, _ = self._moments_from_density(dens_pred, y_grid)
+        Ey_ref, _ = self._moments_from_density(dens_ref, y_grid)
 
-        if Ey_pred.ndim == 2:
-            return np.var(Ey_pred, axis=0)
+        if Ey_pred.ndim == 1:
+            return np.zeros_like(Ey_pred)
 
-        return np.zeros(len(X), dtype=float)
+        return np.mean((Ey_pred - Ey_ref[None, :]) ** 2, axis=0)
         
     def score_total(self, model, X, y_true=None):
         return self._compute_total(model, X)
@@ -92,6 +127,7 @@ class PredictiveVariance(UncertaintyBase):
         return self._compute_epistemic(model, X)
 
     def score(self, model, X, y_true=None):
+        self._validate_inferential_choices(model)
         """Dispatch to total/aleatoric/epistemic score by decomposition."""
         if self.decomposition == 'total':
             return self.score_total(model, X, y_true=y_true)

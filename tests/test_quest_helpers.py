@@ -412,7 +412,7 @@ class TestComputeTotalHelper:
     
     def test_config_validation_passes_correct_config(self, X_single):
         """Test 8 (passing case): Correct config does not raise."""
-        cfg = InferentialChoiceConfig(predict='posterior_predictive', approximate='point_estimate', 
+        cfg = InferentialChoiceConfig(predict='bma', approximate='posterior_predictive', 
                                      point_estimate_criterion='mle')
         model = MockModel(inferential_choice=cfg)
         
@@ -433,27 +433,53 @@ class TestComputeTotalHelper:
             result = quest._compute_total_helper(model, X_single, alpha=0.05)
             assert result is not None
     
-    def test_config_validation_rejects_wrong_predict(self, X_single):
-        """Test 8 (failing case): Wrong predict config raises."""
-        cfg = InferentialChoiceConfig(predict='bma', approximate='point_estimate', 
-                                     point_estimate_criterion='mle')
+    def test_compute_total_helper_accepts_nonbma_predict_config(self, X_single):
+        """Test 8: Helper still returns a result when predict is not bma."""
+        cfg = InferentialChoiceConfig(
+            predict='posterior_predictive',
+            approximate='posterior_predictive',
+            point_estimate_criterion='mle',
+        )
         model = MockModel(inferential_choice=cfg)
         
         quest = QUESTUncertainty(alpha=0.1, decomposition='total', scope='local', mc_n_samples=100)
         
-        with pytest.raises(NotImplementedError, match="predict='posterior_predictive'"):
-            quest._compute_total_helper(model, X_single, alpha=0.05)
+        with patch.object(quest, '_compute_aleatoric', return_value=np.array([0.5])), \
+             patch.object(quest, '_hdr_from_density_function') as mock_hdr, \
+             patch.object(quest, 'tv_distance_mc', return_value=0.1):
+            mock_hdr.side_effect = [
+                (np.array([0.1]), None, np.random.normal(0, 1, (100, 1, 1)),
+                 np.ones((100, 1), dtype=bool)),
+                (np.array([0.1]), None, np.random.normal(0, 1, (100, 1, 1)),
+                 np.ones((100, 1), dtype=bool)),
+            ]
+
+            result = quest._compute_total_helper(model, X_single, alpha=0.05)
+            assert result is not None
     
-    def test_config_validation_rejects_wrong_approximate(self, X_single):
-        """Test 8 (failing case): Wrong approximate config raises."""
-        cfg = InferentialChoiceConfig(predict='posterior_predictive', approximate='posterior_predictive', 
-                                     point_estimate_criterion='mle')
+    def test_compute_total_helper_accepts_nonposterior_approximate_config(self, X_single):
+        """Test 8: Helper still returns a result when approximate is not posterior_predictive."""
+        cfg = InferentialChoiceConfig(
+            predict='bma',
+            approximate='point_estimate',
+            point_estimate_criterion='mle',
+        )
         model = MockModel(inferential_choice=cfg)
         
         quest = QUESTUncertainty(alpha=0.1, decomposition='total', scope='local', mc_n_samples=100)
         
-        with pytest.raises(NotImplementedError, match="approximate='point_estimate'"):
-            quest._compute_total_helper(model, X_single, alpha=0.05)
+        with patch.object(quest, '_compute_aleatoric', return_value=np.array([0.5])), \
+             patch.object(quest, '_hdr_from_density_function') as mock_hdr, \
+             patch.object(quest, 'tv_distance_mc', return_value=0.1):
+            mock_hdr.side_effect = [
+                (np.array([0.1]), None, np.random.normal(0, 1, (100, 1, 1)),
+                 np.ones((100, 1), dtype=bool)),
+                (np.array([0.1]), None, np.random.normal(0, 1, (100, 1, 1)),
+                 np.ones((100, 1), dtype=bool)),
+            ]
+
+            result = quest._compute_total_helper(model, X_single, alpha=0.05)
+            assert result is not None
 
 
 # ============================================================================

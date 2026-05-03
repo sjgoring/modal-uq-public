@@ -23,17 +23,23 @@ class Ensemble(ModelBase):
                 approximate='point_estimate',
                 point_estimate_criterion='mle',
             )
+            quest_cfg = InferentialChoiceConfig(
+                predict='bma',
+                approximate='posterior_predictive',
+                point_estimate_criterion='mle',
+            )
             cfg = self.get_inferential_choice_config()
             if inferential_choice is None:
                 self._inferential_choice_config = default_cfg
-            elif (cfg.predict, cfg.approximate, cfg.point_estimate_criterion) != (
-                default_cfg.predict,
-                default_cfg.approximate,
-                default_cfg.point_estimate_criterion,
-            ):
+            elif (cfg.predict, cfg.approximate, cfg.point_estimate_criterion) not in {
+                (default_cfg.predict, default_cfg.approximate, default_cfg.point_estimate_criterion),
+                (quest_cfg.predict, quest_cfg.approximate, quest_cfg.point_estimate_criterion),
+            }:
                 raise NotImplementedError(
                     "Ensemble with base_model='condgmm' currently only supports inferential_choice "
                     "predict='posterior_predictive', approximate='point_estimate', "
+                    "point_estimate_criterion='mle' or "
+                    "predict='bma', approximate='posterior_predictive', "
                     "point_estimate_criterion='mle'."
                 )
 

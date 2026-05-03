@@ -1,8 +1,9 @@
 import numpy as np
-from .base import UncertaintyBase
-from ..registry import register
 import scipy.integrate as integrate
-from scipy.special import rel_entr
+
+from .base import UncertaintyBase
+from ..models.base import InferentialChoiceConfig
+from ..registry import register
 
 @register('uncertainty','differential_entropy')
 class DifferentialEntropy(UncertaintyBase):
@@ -10,23 +11,16 @@ class DifferentialEntropy(UncertaintyBase):
     Differential entropy with optional decomposition.
 
     Uses dual inferential_choice contexts for uncertainty decomposition:
-    
-    - total:      H[Y | x] computed from predict context
-    - aleatoric:  E_θ[ H(Y | x, θ) ] from approximate context (true DGP with known params)
-    - epistemic:  total - aleatoric (difference from approximate to predict)
 
-    The approximate context represents the true data generating process with point-estimate
-    parameters (minimal epistemic uncertainty), while predict includes parameter uncertainty.
-    
-    Uses model.predict_density(X, y_grid, context='predict'|'approximate') that returns
-    either [N,G] (single density) or [S,N,G] (many densities).
+    - predict: candidate distributions, returned as [S,N,G] or [N,G]
+    - approximate: posterior predictive reference, returned as [N,G] or [S,N,G]
 
-    Aggregation semantics:
-    - single density: score is computed directly on that density
-    - many densities: score is computed per density then averaged over S
+    Entropy decompositions: (Corresponding to C2 of Schweighofer et al.)
+    - total:      BMA of cross-entropy between predict samples and the approximate reference
+    - aleatoric:  BMA of the entropy measure over candidate distributions
+    - epistemic:  BMA of KL(predict sample || approximate reference)
     """
     def __init__(self, base=np.e, decomposition='total', grid_points=512, y_pad=1.0, n_param_samples=20):
-    # def __init__(self, base=np.e, decomposition='total', grid_points=10000, y_pad=1.0, n_param_samples=20):
         assert decomposition in {'total','aleatoric','epistemic'}
         self.base = base
         self.decomposition = decomposition
@@ -42,6 +36,14 @@ class DifferentialEntropy(UncertaintyBase):
         Z = integrate.trapezoid(arr, y_grid, axis=-1)
         Z = np.expand_dims(Z, axis=-1)         # -> [N,1] or [S,N,1]
         return arr / (Z + 1e-12)
+
+    @staticmethod
+    def _posterior_predictive_density(dens):
+        """Collapse a density collection to its posterior predictive density."""
+        dens = np.asarray(dens)
+        if dens.ndim == 3:
+            return dens.mean(axis=0)
+        return dens
 
     @staticmethod
     def _entropy_from_density(dens, y_grid, base):
@@ -68,6 +70,25 @@ class DifferentialEntropy(UncertaintyBase):
         # Integrate
         H = -integrate.trapezoid(integrand, y_grid, axis=-1)
         return H
+
+    @staticmethod
+    def _cross_entropy_from_density(p, q, y_grid, base):
+        """
+        Compute cross-entropy CE[p || q] = -∫ p log_base q dy.
+
+        Supports p and q with shapes [N,G] or [S,N,G]. When q is a [N,G] reference,
+        it broadcasts across the sample axis of p.
+        """
+        p = DifferentialEntropy._normalize_last_axis(np.asarray(p), y_grid)
+        q = DifferentialEntropy._normalize_last_axis(np.asarray(q), y_grid)
+
+        eps = 1e-40
+        logq = np.log(q + eps)
+        if base != np.e:
+            logq = logq / np.log(base)
+
+        integrand = np.where(p > 0, p * logq, 0.0)
+        return -integrate.trapezoid(integrand, y_grid, axis=-1)
 
     @staticmethod
     def _kl_divergence(p, q, y_grid, base=np.e):
@@ -114,80 +135,51 @@ class DifferentialEntropy(UncertaintyBase):
             kl = kl / np.log(base)
         return kl
 
+    @staticmethod
+    def _validate_inferential_choices(model):
+        cfg = model.get_inferential_choice_config()
+        predict = InferentialChoiceConfig.canonicalize_strategy(cfg.predict)
+        approximate = InferentialChoiceConfig.canonicalize_strategy(cfg.approximate)
+
+        if predict != 'bma' or approximate != 'posterior_predictive':
+            raise NotImplementedError(
+                "DifferentialEntropy requires inferential choices predict='bma' and "
+                "approximate='posterior_predictive'. "
+                f"Current settings: predict='{cfg.predict}', approximate='{cfg.approximate}'."
+            )
+
     def _compute_total(self, model, X):
+        y_grid = model.default_y_grid(X, grid_points=self.grid_points, y_pad=self.y_pad)
+        dens_pred = self._predict_density_collection(model, X, y_grid, context='predict')
+        dens_ref = self._posterior_predictive_density(
+            self._predict_density_collection(model, X, y_grid, context='approximate')
+        )
+        ce = self._cross_entropy_from_density(dens_pred, dens_ref, y_grid, self.base)
+        return ce.mean(axis=0)
+
+    def _compute_aleatoric(self, model, X):
         y_grid = model.default_y_grid(X, grid_points=self.grid_points, y_pad=self.y_pad)
         dens_pred = self._predict_density_collection(model, X, y_grid, context='predict')
         H_pred = self._entropy_from_density(dens_pred, y_grid, self.base)
         return H_pred.mean(axis=0)
 
-    def _compute_aleatoric(self, model, X):
-        y_grid = model.default_y_grid(X, grid_points=self.grid_points, y_pad=self.y_pad)
-        dens_approx = self._predict_density_collection(model, X, y_grid, context='approximate')
-        H_approx = self._entropy_from_density(dens_approx, y_grid, self.base)
-        return H_approx.mean(axis=0)
-
     def _compute_epistemic(self, model, X):
-        ## Compute the KL-Div over a shared y-grid (y will only ever be 1-Dim)
-
         y_grid = model.default_y_grid(X, grid_points=self.grid_points, y_pad=self.y_pad)
-        dens_approx = self._predict_density_collection(model, X, y_grid, context='approximate')
         dens_pred = self._predict_density_collection(model, X, y_grid, context='predict')
-
-        # most dens will be [1,N,G]. Raise an error if not.
-        if dens_approx.shape[0] != 1 or dens_pred.shape[0] != 1:
-            raise NotImplementedError("Epistemic uncertainty by entropy is currently implemented only for single density per context (shape [1,N,G]). Consider implementing the KL divergence computation for multiple densities if needed.")
-
-        # flatten to [N,G] for KL computation
-        dens_approx = dens_approx[0]
-        dens_pred = dens_pred[0]
+        dens_ref = self._posterior_predictive_density(
+            self._predict_density_collection(model, X, y_grid, context='approximate')
+        )
+        if dens_pred.ndim == 2:
+            dens_pred = dens_pred[None, ...]
 
         kl_divs = []
-        for idx in range(X.shape[0]):
-            kl_divs.append(self._kl_divergence(dens_approx[idx,:], dens_pred[idx,:], y_grid, self.base))
-        return np.array(kl_divs)
+        for dens_s in dens_pred:
+            kl_per_input = []
+            for idx in range(X.shape[0]):
+                kl_per_input.append(self._kl_divergence(dens_s[idx, :], dens_ref[idx, :], y_grid, self.base))
+            kl_divs.append(kl_per_input)
 
-
-
-        y_grid = model.default_y_grid(X, grid_points=self.grid_points, y_pad=self.y_pad)
-        dens_pred = self._predict_density_collection(model, X, y_grid, context='predict')
-        dens_approx = self._predict_density_collection(model, X, y_grid, context='approximate')
-
-        # kl_div = 
-
-        S_pred = dens_pred.shape[0]
-        S_approx = dens_approx.shape[0]
-        kl_div = []
-
-        if S_pred == 1 and S_approx == 1:
-            for i in range(len(X)):
-                kl = self._kl_divergence(dens_approx[0, i, :], dens_pred[0, i, :], y_grid)
-                kl_div.append(kl)
-        elif S_pred > 1 and S_approx == 1:
-            for i in range(len(X)):
-                kl_samples = []
-                for s in range(S_pred):
-                    kl = self._kl_divergence(dens_approx[0, i, :], dens_pred[s, i, :], y_grid)
-                    kl_samples.append(kl)
-                kl_div.append(np.mean(kl_samples))
-        elif S_pred == 1 and S_approx > 1:
-            for i in range(len(X)):
-                kl_samples = []
-                for s in range(S_approx):
-                    kl = self._kl_divergence(dens_approx[s, i, :], dens_pred[0, i, :], y_grid)
-                    kl_samples.append(kl)
-                kl_div.append(np.mean(kl_samples))
-        else:
-            for i in range(len(X)):
-                kl_pred_samples = []
-                for s_pred in range(S_pred):
-                    kl_approx_samples = []
-                    for s_approx in range(S_approx):
-                        kl = self._kl_divergence(dens_approx[s_approx, i, :], dens_pred[s_pred, i, :], y_grid)
-                        kl_approx_samples.append(kl)
-                    kl_pred_samples.append(np.mean(kl_approx_samples))
-                kl_div.append(np.mean(kl_pred_samples))
-
-        return np.array(kl_div)
+        return np.mean(np.asarray(kl_divs), axis=0)
 
     def score_total(self, model, X, y_true=None):
         return self._compute_total(model, X)
@@ -199,14 +191,7 @@ class DifferentialEntropy(UncertaintyBase):
         return self._compute_epistemic(model, X)
 
     def score(self, model, X, y_true=None):
-        # Checking model config compatible.
-        cfg = model.get_inferential_choice_config()
-        if cfg.predict != 'posterior_predictive' or cfg.approximate != 'point_estimate' or cfg.point_estimate_criterion != 'mle':
-            raise NotImplementedError(
-                f"Model inferential choice contexts must be set to predict='posterior_predictive' and approximate='point_estimate', with point_estimate_criterion='mle' for QUEST uncertainty. Current settings: predict='{cfg.predict}', approximate='{cfg.approximate}'."
-            )
-
-        """Dispatch to total/aleatoric/epistemic score by decomposition."""
+        self._validate_inferential_choices(model)
         if self.decomposition == 'total':
             return self.score_total(model, X, y_true=y_true)
         if self.decomposition == 'aleatoric':

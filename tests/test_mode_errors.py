@@ -130,3 +130,63 @@ def test_modal_coverage_measure_est_reference_nonuniform_grid_uses_trapezoidal_m
     expected = integrate.trapezoid(norm_est * indicator, y_grid)
 
     assert result == pytest.approx(expected)
+
+
+def test_likelihood_ratio_measure_averages_over_member_stack():
+    y_grid = np.array([0.0, 1.0, 2.0])
+    y_true = np.array([0.0, 2.0])
+    y_mode_pred = np.array([1.0, 1.0])
+
+    true_dens = np.array([
+        [0.2, 0.5, 0.3],
+        [0.1, 0.6, 0.3],
+    ])
+    est_dens = np.stack([
+        true_dens,
+        np.array([
+            [0.3, 0.4, 0.3],
+            [0.2, 0.3, 0.5],
+        ]),
+    ], axis=0)
+
+    result = likelihood_ratio_measure(
+        y_true,
+        y_mode_pred,
+        _kwargs(true_dens, est_dens, y_grid, "true"),
+    )
+
+    expected = np.mean([
+        likelihood_ratio_measure(y_true, y_mode_pred, _kwargs(true_dens, est_dens[0], y_grid, "true")),
+        likelihood_ratio_measure(y_true, y_mode_pred, _kwargs(true_dens, est_dens[1], y_grid, "true")),
+    ])
+    assert result == pytest.approx(expected)
+
+
+def test_modal_coverage_measure_averages_over_member_stack():
+    y_grid = np.array([0.0, 1.0, 2.0])
+    y_true = np.array([1.0, 0.0])
+    y_mode_pred = np.array([0.0, 2.0])
+
+    true_dens = np.array([
+        [0.1, 0.6, 0.3],
+        [0.2, 0.2, 0.6],
+    ])
+    est_dens = np.stack([
+        true_dens,
+        np.array([
+            [0.3, 0.3, 0.4],
+            [0.5, 0.2, 0.3],
+        ]),
+    ], axis=0)
+
+    result = modal_coverage_measure(
+        y_true,
+        y_mode_pred,
+        _kwargs(true_dens, est_dens, y_grid, "true"),
+    )
+
+    expected = np.mean([
+        modal_coverage_measure(y_true, y_mode_pred, _kwargs(true_dens, est_dens[0], y_grid, "true")),
+        modal_coverage_measure(y_true, y_mode_pred, _kwargs(true_dens, est_dens[1], y_grid, "true")),
+    ])
+    assert result == pytest.approx(expected)

@@ -17,17 +17,23 @@ class CondGMM(ModelBase):
             approximate='point_estimate',
             point_estimate_criterion='mle',
         )
+        bma_cfg = InferentialChoiceConfig(
+            predict='bma',
+            approximate='posterior_predictive',
+            point_estimate_criterion='mle',
+        )
         cfg = self.get_inferential_choice_config()
         if inferential_choice is None:
             self._inferential_choice_config = default_cfg
-        elif (cfg.predict, cfg.approximate, cfg.point_estimate_criterion) != (
-            default_cfg.predict,
-            default_cfg.approximate,
-            default_cfg.point_estimate_criterion,
-        ):
+        elif (cfg.predict, cfg.approximate, cfg.point_estimate_criterion) not in {
+            (default_cfg.predict, default_cfg.approximate, default_cfg.point_estimate_criterion),
+            (bma_cfg.predict, bma_cfg.approximate, bma_cfg.point_estimate_criterion),
+        }:
             raise NotImplementedError(
                 "CondGMM currently only supports inferential_choice "
                 "predict='posterior_predictive', approximate='point_estimate', "
+                "point_estimate_criterion='mle' or "
+                "predict='bma', approximate='posterior_predictive', "
                 "point_estimate_criterion='mle'."
             )
         self.model = ConditionalGMMRegressor(n_components=n_components, **kwargs)
@@ -41,11 +47,7 @@ class CondGMM(ModelBase):
 
     def predict_density(self, X, y, context='predict'):
         strategy = self.resolve_inferential_choice(context=context)
-        if strategy == 'bma':
-            raise NotImplementedError(
-                "BMA inferential choice is not implemented for CondGMM because it is deterministic."
-            )
-        if strategy == 'posterior_predictive':
+        if strategy in {'bma', 'posterior_predictive'}:
             # CondGMM is deterministic, so we return the same density regardless of the inferential choice.
             pass
 

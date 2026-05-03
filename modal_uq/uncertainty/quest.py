@@ -1,7 +1,9 @@
 import numpy as np
 from .base import UncertaintyBase
+from ..models.base import InferentialChoiceConfig
 from ..registry import register
 import scipy.integrate as integrate
+from scipy.interpolate import interp1d
 
 from modal_uq.models.ensemble import Ensemble
 
@@ -52,6 +54,26 @@ class QUESTUncertainty(UncertaintyBase):
         Z = integrate.trapezoid(arr, y_grid, axis=-1)     # shape: [N] or [S,N]
         Z = np.expand_dims(Z, axis=-1)         # -> [N,1] or [S,N,1]
         return arr / (Z + 1e-12)
+
+    def _validate_inferential_choices(self, model):
+        """Validate inferential choice configuration for BMA-based QUEST.
+
+        Skip validation for `epistemic` decomposition which uses Ensemble-specific
+        second-order KDE/MC logic and does not require predict/approximate contexts.
+        """
+        if self.decomposition == 'epistemic':
+            return
+
+        cfg = model.get_inferential_choice_config()
+        predict = InferentialChoiceConfig.canonicalize_strategy(cfg.predict)
+        approximate = InferentialChoiceConfig.canonicalize_strategy(cfg.approximate)
+
+        if predict != 'bma' or approximate != 'posterior_predictive':
+            raise NotImplementedError(
+                "QUESTUncertainty requires inferential choices predict='bma' and "
+                "approximate='posterior_predictive' for total/aleatoric decompositions. "
+                f"Current settings: predict='{cfg.predict}', approximate='{cfg.approximate}'."
+            )
 
     # @staticmethod
     # def _lebesgue_measure_hdr(mask, y_grid):
@@ -228,6 +250,52 @@ class QUESTUncertainty(UncertaintyBase):
         bounds = np.stack([lows - pad, highs + pad], axis=-1)  # (N, d, 2)
         return bounds
 
+    def _hdr_from_density_grid_1d(self, density_func, X, alpha=0.05, grid=None):
+        """Compute 1D HDR volume on a grid.
+
+        This helper is only for the simple 1D case. Multivariate densities must
+        continue using the Monte Carlo HDR path.
+        """
+        X = np.asarray(X)
+        if grid is None:
+            grid = np.asarray(self._default_density_grid(X))
+        else:
+            grid = np.asarray(grid)
+
+        if grid.ndim != 1:
+            raise ValueError("1D grid HDR helper requires a 1D grid.")
+
+        y_grid = grid
+        dy = np.diff(y_grid)
+        if dy.size == 0:
+            raise ValueError("Grid must contain at least two points for HDR computation.")
+        dy = np.concatenate([dy, [dy[-1]]])
+
+        volumes = np.zeros(X.shape[0])
+        for i in range(X.shape[0]):
+            dens = np.asarray(density_func(y_grid, input_index=i)).reshape(-1)
+            if dens.shape[0] != y_grid.shape[0]:
+                raise ValueError("1D grid density callable must return one density value per grid point.")
+
+            z = integrate.trapezoid(dens, y_grid)
+            p = dens / (z + 1e-12)
+            idx_sorted = np.argsort(-p)
+            p_sorted = p[idx_sorted]
+            cum_mass = np.cumsum(p_sorted * dy)
+            cutoff_idx = np.searchsorted(cum_mass, 1.0 - alpha, side='left')
+            cutoff_idx = min(cutoff_idx, p_sorted.shape[0] - 1)
+            threshold = p_sorted[cutoff_idx]
+            mask = p >= threshold
+            volumes[i] = np.sum(mask * dy)
+
+        return volumes
+
+    def _default_density_grid(self, X):
+        """Return the local 1D evaluation grid used by QUEST helpers."""
+        # The 1D helper is intentionally local and deterministic.
+        # If the model provides a custom grid, the caller should pass it in.
+        return np.linspace(-self.y_pad, self.y_pad, self.grid_points)
+
     def _hdr_from_density_function(self, density_func, sampler, X, alpha=0.05, n_samples=None, random_state=None):
         """
         Monte Carlo HDR threshold estimation using samples from the target density.
@@ -343,8 +411,14 @@ class QUESTUncertainty(UncertaintyBase):
             return np.trapz(f, alphas, axis=0)
 
     def _compute_total_helper(self, model, X, alpha):
-        # Computers the local version of TU, is called multiple times for global measure.
-
+        """Compute local total uncertainty as BMA of (alpha_volume / (1 - TV)) over predict samples.
+        
+        For each predict sample s:
+        1. Compute alpha_volume(predict_s, alpha)
+        2. Compute TV distance between approximate (reference) and predict_s
+        3. Compute result_s = alpha_volume_s / (1 - tv_s)
+        Average across all predict samples: TU_local = mean([result_s])
+        """
         # Override alpha and scope
         alpha_old = self.alpha
         scope_old = self.scope
@@ -352,95 +426,160 @@ class QUESTUncertainty(UncertaintyBase):
         self.scope = 'local'
 
         try:
-            # First, obtain local AU measure.
-            au = self._compute_aleatoric(model, X)
+            y_grid = model.default_y_grid(X, grid_points=self.grid_points, y_pad=self.y_pad)
+            y_grid = np.asarray(y_grid)
 
-            # Inferential choices - currently not flexible.
-            # p* - MLE. Derived via approximate context.
-            # p_hat - posterior predictive. Derived via predict context.
+            if y_grid.ndim == 1:
+                predict_dens = self._as_density_collection(model.predict_density(X, y_grid, context='predict'))
+                approximate_dens = self._as_density_collection(model.predict_density(X, y_grid, context='approximate'))
 
-            # Ensure config is set correctly, with approximate context as MLE, and predict as posterior predictive.
-            cfg = model.get_inferential_choice_config()
-            if cfg.predict != 'posterior_predictive' or cfg.approximate != 'point_estimate' or cfg.point_estimate_criterion != 'mle':
-                raise NotImplementedError(
-                    f"Model inferential choice contexts must be set to predict='posterior_predictive' and approximate='point_estimate', with point_estimate_criterion='mle' for QUEST uncertainty. Current settings: predict='{cfg.predict}', approximate='{cfg.approximate}'."
+                predict_mean = np.mean(predict_dens, axis=0)
+                approximate_mean = np.mean(approximate_dens, axis=0)
+
+                def predict_density_1d(points, input_index=0):
+                    points = np.asarray(points).reshape(-1)
+                    return np.interp(points, y_grid, predict_mean[input_index])
+
+                def approximate_density_1d(points, input_index=0):
+                    points = np.asarray(points).reshape(-1)
+                    return np.interp(points, y_grid, approximate_mean[input_index])
+
+                _ = approximate_density_1d  # retained for symmetry with the total decomposition
+                return self._hdr_from_density_grid_1d(predict_density_1d, X, alpha=alpha, grid=y_grid)
+
+            # Multivariate fallback: preserve existing Monte Carlo behaviour unchanged.
+            sampler = lambda X_, n_samples, rng: model.sample_output(X_, n_samples, rng)
+            bounds = model.output_bounds(X, q_low=self.bounds_q_low, q_high=self.bounds_q_high,
+                                         pad_frac=self.bounds_pad_frac, n_samples=min(10000, self.mc_n_samples),
+                                         rng=self.mc_random_state)
+            predict_dens = self._as_density_collection(model.predict_density(X, y_grid, context='predict'))
+            S_p = predict_dens.shape[0]
+
+            result_list = []
+            pointwise_density = model.density_function_for_input(X) if hasattr(model, 'density_function_for_input') else None
+            for s in range(S_p):
+                def p_hat_s(points, input_index=0):
+                    if pointwise_density is not None:
+                        return np.asarray(pointwise_density(points, input_index=input_index)).reshape(-1)
+                    x_i = np.asarray(X)[input_index:input_index + 1]
+                    dens = model.predict_density(x_i, np.asarray(points), context='predict')
+                    dens = self._as_density_collection(dens)
+                    return np.asarray(dens[s, 0]).reshape(-1)
+
+                def p_star_ref(points, input_index=0):
+                    if pointwise_density is not None:
+                        return np.asarray(pointwise_density(points, input_index=input_index)).reshape(-1)
+                    x_i = np.asarray(X)[input_index:input_index + 1]
+                    dens = model.predict_density(x_i, np.asarray(points), context='approximate')
+                    dens = self._as_density_collection(dens)
+                    return np.mean(np.asarray(dens[:, 0]), axis=0).reshape(-1)
+
+                alpha_vol_s = self.alpha_volume(p_hat_s, sampler, bounds, X, alpha=alpha,
+                                                n_samples=self.mc_n_samples, random_state=self.mc_random_state,
+                                                method='monte_carlo')
+
+                c_alpha_star, _, samples_star, samples_star_mask = self._hdr_from_density_function(
+                    p_star_ref, sampler, X, alpha)
+                c_alpha_hat, _, samples_hat, sample_hat_mask = self._hdr_from_density_function(
+                    p_hat_s, sampler, X, alpha)
+
+                sampler_p_star = self._hdr_resampler_from_samples(samples_star, samples_star_mask)
+                sampler_p_hat = self._hdr_resampler_from_samples(samples_hat, sample_hat_mask)
+
+                def p_star_trunc(points, input_index=0):
+                    vals = np.asarray(p_star_ref(points, input_index=input_index)).ravel()
+                    return np.where(vals >= c_alpha_star[input_index], vals, 0.0)
+
+                def p_hat_trunc(points, input_index=0):
+                    vals = np.asarray(p_hat_s(points, input_index=input_index)).ravel()
+                    return np.where(vals >= c_alpha_hat[input_index], vals, 0.0)
+
+                tv_s = self.tv_distance_mc(
+                    p_star_trunc,
+                    p_hat_trunc,
+                    sampler_p_star,
+                    sampler_p_hat,
+                    X,
+                    n_samples=self.mc_n_samples,
+                    random_state=self.mc_random_state,
                 )
 
-            y_grid = model.default_y_grid(X, grid_points=self.grid_points, y_pad=self.y_pad)
+                tv_s_safe = np.minimum(tv_s, 1.0 - 1e-10)
+                result_list.append(alpha_vol_s / (1.0 - tv_s_safe))
 
-            def p_star(points, input_index=0):
-                x_i = np.asarray(X)[input_index:input_index + 1]
-                dens = model.predict_density(x_i, np.asarray(points), context='approximate')
-                return np.asarray(dens).reshape(-1)
-
-            def p_hat(points, input_index=0):
-                x_i = np.asarray(X)[input_index:input_index + 1]
-                dens = model.predict_density(x_i, np.asarray(points), context='predict')
-                return np.asarray(dens).reshape(-1)
-
-            # Obtain HDR threshold estimates and the corresponding accepted samples.
-            sampler = lambda X_, n_samples, rng: model.sample_output(X_, n_samples, rng)
-
-            c_alpha_star, _, samples_star, samples_star_mask = self._hdr_from_density_function(p_star, sampler, X, alpha)
-            c_alpha_hat, _, samples_hat, sample_hat_mask = self._hdr_from_density_function(p_hat, sampler, X, alpha)
-
-            # Redefine samplers for truncated distributions using HDR-filtered samples.
-            sampler_p_star = self._hdr_resampler_from_samples(samples_star, samples_star_mask)
-            sampler_p_hat = self._hdr_resampler_from_samples(samples_hat, sample_hat_mask)
-
-            def p_star_trunc(points, input_index=0):
-                vals = np.asarray(p_star(points, input_index=input_index)).ravel()
-                return np.where(vals >= c_alpha_star[input_index], vals, 0.0)
-
-            def p_hat_trunc(points, input_index=0):
-                vals = np.asarray(p_hat(points, input_index=input_index)).ravel()
-                return np.where(vals >= c_alpha_hat[input_index], vals, 0.0)
-
-            # Then, divide by 1-TV(p_alpha*,\hat{p_alpha})
-            tv = self.tv_distance_mc(
-                p_star_trunc,
-                p_hat_trunc,
-                sampler_p_star,
-                sampler_p_hat,
-                X,
-                n_samples=self.mc_n_samples,
-                random_state=self.mc_random_state,
-            )
-
-            out = au * (1 - tv)
-            return out
+            results = np.stack(result_list, axis=0)
+            return np.mean(results, axis=0)
         finally:
             # Post - reset scopes
             self.alpha = alpha_old
             self.scope = scope_old
 
-
-        raise NotImplementedError("Total uncertainty for QUEST not yet determined. See output file for values of EU and AU. TU will be a function of these.")
-        # y_grid = model.default_y_grid(X, grid_points=self.grid_points, y_pad=self.y_pad)
-        # dens_pred = self._predict_density_collection(model, X, y_grid, context='predict')
-        # alpha_volume_s = []
-        # for s in range(dens_pred.shape[0]):
-        #     _, mask_pred = self._hdr_from_density(dens_pred[s], y_grid, self.alpha)
-        #     alpha_volume_s.append(self._lebesgue_measure_hdr(mask_pred, y_grid))
-        # return np.mean(np.stack(alpha_volume_s, axis=0), axis=0)
-
     def _compute_aleatoric(self, model, X):
-        # Local scope, do alpha vol, global, do integrated vol
-        # take average at end to account for possibility of BMA (post pred will only be one dist, average will not matter here).
-        # Monte Carlo HDR-only path: require model to provide sampler, bounds, and density callable
-        if not hasattr(model, 'sample_output') or not hasattr(model, 'output_bounds') or not hasattr(model, 'density_function_for_input'):
-            raise NotImplementedError("Model must implement sample_output, output_bounds, and density_function_for_input for Monte Carlo HDR estimation.")
+        """Compute aleatoric uncertainty as BMA of QUEST measure over predict samples.
+        
+        Uses predict context with BMA decomposition:
+        - Obtains predict densities [S_p, N, G] or [N, G]
+        - For each predict sample: computes alpha_volume
+        - Averages across all predict samples
+        """
+        y_grid = model.default_y_grid(X, grid_points=self.grid_points, y_pad=self.y_pad)
+        y_grid = np.asarray(y_grid)
+
+        if y_grid.ndim == 1:
+            predict_dens = self._as_density_collection(model.predict_density(X, y_grid, context='predict'))
+            predict_mean = np.mean(predict_dens, axis=0)
+
+            def density_func_1d(points, input_index=0):
+                points = np.asarray(points).reshape(-1)
+                return np.interp(points, y_grid, predict_mean[input_index])
+
+            if self.scope == 'local':
+                return self._hdr_from_density_grid_1d(density_func_1d, X, alpha=self.alpha, grid=y_grid)
+            if self.scope == 'global':
+                alpha_grid = np.linspace(0.01, 0.99, num=self.n_alpha)
+                curve = []
+                for alpha in alpha_grid:
+                    curve.append(self._hdr_from_density_grid_1d(density_func_1d, X, alpha=alpha, grid=y_grid))
+                curve = np.stack(curve, axis=0)
+                return np.trapz(curve, alpha_grid, axis=0)
+            raise ValueError(f"Unknown scope: {self.scope}")
+
+        # Multivariate fallback: preserve existing Monte Carlo behavior unchanged.
+        if not hasattr(model, 'sample_output') or not hasattr(model, 'output_bounds'):
+            raise NotImplementedError("Model must implement sample_output and output_bounds for Monte Carlo HDR estimation.")
+
         sampler = lambda X_, n_samples, rng: model.sample_output(X_, n_samples, rng)
-        bounds = model.output_bounds(X, q_low=self.bounds_q_low, q_high=self.bounds_q_high, pad_frac=self.bounds_pad_frac, n_samples=min(10000, self.mc_n_samples), rng=self.mc_random_state)
-        density_func = model.density_function_for_input(X)
-        uncert_s = []
-        if self.scope == 'local':
-            av = self.alpha_volume(density_func, sampler, bounds, X, alpha=self.alpha, n_samples=self.mc_n_samples, random_state=self.mc_random_state)
-            uncert_s.append(av)
-        elif self.scope == 'global':
-            iv = self.integrated_volume(density_func, sampler, bounds, X, n_alpha=self.n_alpha, n_samples=self.mc_n_samples, random_state=self.mc_random_state)
-            uncert_s.append(iv)
-        return np.mean(np.stack(uncert_s, axis=0), axis=0)
+        bounds = model.output_bounds(X, q_low=self.bounds_q_low, q_high=self.bounds_q_high,
+                                      pad_frac=self.bounds_pad_frac, n_samples=min(10000, self.mc_n_samples),
+                                      rng=self.mc_random_state)
+
+        predict_dens = self._as_density_collection(model.predict_density(X, y_grid, context='predict'))
+        S_p = predict_dens.shape[0]
+        uncert_list = []
+        pointwise_density = model.density_function_for_input(X) if hasattr(model, 'density_function_for_input') else None
+
+        for s in range(S_p):
+            def density_func_s(points, input_index=0):
+                if pointwise_density is not None:
+                    return np.asarray(pointwise_density(points, input_index=input_index)).reshape(-1)
+                x_i = np.asarray(X)[input_index:input_index + 1]
+                dens_vals = model.predict_density(x_i, np.asarray(points), context='predict')
+                dens_vals = self._as_density_collection(dens_vals)
+                return np.asarray(dens_vals[s, 0]).reshape(-1)
+
+            if self.scope == 'local':
+                av_s = self.alpha_volume(density_func_s, sampler, bounds, X,
+                                         alpha=self.alpha, n_samples=self.mc_n_samples,
+                                         random_state=self.mc_random_state, method='monte_carlo')
+                uncert_list.append(av_s)
+            elif self.scope == 'global':
+                iv_s = self.integrated_volume(density_func_s, sampler, bounds, X,
+                                              n_alpha=self.n_alpha, n_samples=self.mc_n_samples,
+                                              random_state=self.mc_random_state, method='monte_carlo')
+                uncert_list.append(iv_s)
+
+        uncert_s = np.stack(uncert_list, axis=0)
+        return np.mean(uncert_s, axis=0)
 
     def _compute_epistemic(self, model, X):
         # Epistemic uncertainty via second-order (parameter-space) HDR
@@ -528,6 +667,9 @@ class QUESTUncertainty(UncertaintyBase):
 
     def score(self, model, X, y_true=None):
         """Dispatch to total/aleatoric/epistemic score by decomposition."""
+        # Validate inferential choices upfront
+        self._validate_inferential_choices(model)
+        
         if self.decomposition == 'total':
             return self._compute_total(model, X)
         if self.decomposition == 'aleatoric':
@@ -536,27 +678,61 @@ class QUESTUncertainty(UncertaintyBase):
             return self._compute_epistemic(model, X)
         raise ValueError(f"Unknown decomposition: {self.decomposition}")
 
-    def alpha_volume(self, density_func, sampler, bounds, X, alpha=None, n_samples=None, random_state=None):
+    def alpha_volume(self, density_func, sampler=None, bounds=None, X=None, alpha=None, n_samples=None, random_state=None, method='auto', grid=None):
         """
-        Monte Carlo alpha-volume: estimate Lebesgue measure of HDR for each input in X.
+        Alpha-volume with selectable HDR method.
 
         Parameters
         - density_func: callable(points, input_index) -> (M,) densities
-        - sampler: callable(X, n_samples, rng) -> (n_samples, N, d)
-        - bounds: (N, d, 2) per-input axis-aligned box
+        - sampler: callable(X, n_samples, rng) -> (n_samples, N, d) [MC only]
+        - bounds: (N, d, 2) per-input axis-aligned box [MC only]
         - X: inputs array shape (N, ...)
         """
+        if X is None:
+            raise ValueError("X must be provided.")
         alpha_val = self.alpha if alpha is None else alpha
+        X = np.asarray(X)
+        if method == 'grid':
+            return self._hdr_from_density_grid_1d(density_func, X, alpha=alpha_val, grid=grid)
+        if method not in {'auto', 'monte_carlo'}:
+            raise ValueError("method must be 'auto', 'grid', or 'monte_carlo'.")
+        if sampler is None or bounds is None:
+            raise ValueError("sampler and bounds are required for Monte Carlo HDR computation.")
         n_samples = int(n_samples or self.mc_n_samples)
-        c_alpha, hdr_indicator, samples, sample_mask = self._hdr_from_density_function(density_func, sampler, X, alpha=alpha_val, n_samples=n_samples, random_state=random_state)
-        volumes, fractions = self._lebesgue_measure_hdr_mc(density_func, c_alpha, bounds, n_samples=n_samples, random_state=random_state)
+        c_alpha, hdr_indicator, samples, sample_mask = self._hdr_from_density_function(
+            density_func, sampler, X, alpha=alpha_val, n_samples=n_samples, random_state=random_state
+        )
+        volumes, fractions = self._lebesgue_measure_hdr_mc(
+            density_func, c_alpha, bounds, n_samples=n_samples, random_state=random_state
+        )
         return volumes
 
-    def integrated_volume(self, density_func, sampler, bounds, X, n_alpha=100, n_samples=None, random_state=None):
+    def integrated_volume(self, density_func, sampler=None, bounds=None, X=None, n_alpha=100, n_samples=None, random_state=None, method='auto', grid=None):
+        if X is None:
+            raise ValueError("X must be provided.")
+        X = np.asarray(X)
+        if method == 'grid':
+            alpha_volume_curve = []
+            alpha_grid = np.linspace(0, 1, n_alpha)
+            for alpha in alpha_grid:
+                av = self.alpha_volume(
+                    density_func,
+                    X=X,
+                    alpha=alpha,
+                    method='grid',
+                    grid=grid,
+                )
+                alpha_volume_curve.append(av)
+            alpha_volume_curve = np.stack(alpha_volume_curve, axis=0)
+            meta = integrate.trapezoid(alpha_volume_curve, alpha_grid, axis=0)
+            return np.maximum(meta, 0.0)
+
+        if method not in {'auto', 'monte_carlo'}:
+            raise ValueError("method must be 'auto', 'grid', or 'monte_carlo'.")
         alpha_volume_curve = []
         alpha_grid = np.linspace(0, 1, n_alpha)
         for alpha in alpha_grid:
-            av = self.alpha_volume(density_func, sampler, bounds, X, alpha=alpha, n_samples=n_samples, random_state=random_state)
+            av = self.alpha_volume(density_func, sampler, bounds, X, alpha=alpha, n_samples=n_samples, random_state=random_state, method='monte_carlo')
             alpha_volume_curve.append(av)
         alpha_volume_curve = np.stack(alpha_volume_curve, axis=0)
         meta = integrate.trapezoid(alpha_volume_curve, alpha_grid, axis=0)

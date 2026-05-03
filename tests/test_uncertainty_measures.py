@@ -14,6 +14,12 @@ from modal_uq.models.base import ModelBase
 from modal_uq.models.ensemble import Ensemble
 
 
+REQUIRED_INFERENTIAL_CHOICE = {
+    'predict': 'bma',
+    'approximate': 'posterior_predictive',
+}
+
+
 # ============================================================================
 # DUMMY MODELS FOR TESTING
 # ============================================================================
@@ -21,8 +27,8 @@ from modal_uq.models.ensemble import Ensemble
 class GaussianDummyModel(ModelBase):
     """Deterministic model returning single Gaussian density [N,G]."""
     
-    def __init__(self, mean=0.0, std=0.5, grid_points=512):
-        super().__init__()
+    def __init__(self, mean=0.0, std=0.5, grid_points=512, inferential_choice=None):
+        super().__init__(inferential_choice=inferential_choice or REQUIRED_INFERENTIAL_CHOICE)
         self.mean = mean
         self.std = std
         self.grid_points = grid_points
@@ -67,8 +73,8 @@ class GaussianDummyModel(ModelBase):
 class TwoGaussianMixtureDummyModel(ModelBase):
     """Stochastic model returning mixture of two Gaussians [S,N,G]."""
     
-    def __init__(self, mean1=0.0, std1=0.3, mean2=0.0, std2=0.7, grid_points=512):
-        super().__init__()
+    def __init__(self, mean1=0.0, std1=0.3, mean2=0.0, std2=0.7, grid_points=512, inferential_choice=None):
+        super().__init__(inferential_choice=inferential_choice or REQUIRED_INFERENTIAL_CHOICE)
         self.mean1 = mean1
         self.std1 = std1
         self.mean2 = mean2
@@ -134,8 +140,8 @@ class TwoGaussianMixtureDummyModel(ModelBase):
 class ContextAwareDummyModel(ModelBase):
     """Model with identical densities for both contexts (epistemic uncertainty = 0)."""
     
-    def __init__(self, mean=0.0, std=0.5, grid_points=512):
-        super().__init__()
+    def __init__(self, mean=0.0, std=0.5, grid_points=512, inferential_choice=None):
+        super().__init__(inferential_choice=inferential_choice or REQUIRED_INFERENTIAL_CHOICE)
         self.mean = mean
         self.std = std
         self.grid_points = grid_points
@@ -176,8 +182,8 @@ class ContextAwareDummyModel(ModelBase):
 class Bivariate2DGaussianDummyModel(ModelBase):
     """Deterministic model returning 2D bivariate Gaussian density on a 2D grid."""
     
-    def __init__(self, mean=np.array([0.0, 0.0]), cov=None, grid_points=64):
-        super().__init__()
+    def __init__(self, mean=np.array([0.0, 0.0]), cov=None, grid_points=64, inferential_choice=None):
+        super().__init__(inferential_choice=inferential_choice or REQUIRED_INFERENTIAL_CHOICE)
         self.mean = np.asarray(mean)
         if cov is None:
             cov = np.eye(2)
@@ -274,7 +280,7 @@ class Bivariate2DGaussianMixtureDummyModel(ModelBase):
     """2D bimodal mixture of two Gaussians for testing HDR on disconnected regions."""
     
     def __init__(self, mean1=np.array([-5.0, 0.0]), mean2=np.array([5.0, 0.0]), 
-                 cov=None, weight=0.5, grid_points=64):
+                 cov=None, weight=0.5, grid_points=64, inferential_choice=None):
         """
         Parameters
         ----------
@@ -287,7 +293,7 @@ class Bivariate2DGaussianMixtureDummyModel(ModelBase):
         grid_points : int
             Grid resolution for density computation
         """
-        super().__init__()
+        super().__init__(inferential_choice=inferential_choice or REQUIRED_INFERENTIAL_CHOICE)
         self.mean1 = np.asarray(mean1)
         self.mean2 = np.asarray(mean2)
         if cov is None:
@@ -398,8 +404,11 @@ class Bivariate2DGaussianMixtureDummyModel(ModelBase):
 class MinimalMockEnsemble(Ensemble):
     """Minimal mock Ensemble for testing QUEST epistemic uncertainty."""
     
-    def __init__(self, n_members=3, grid_points=512):
-        super().__init__()
+    def __init__(self, n_members=3, grid_points=512, inferential_choice=None):
+        super().__init__(inferential_choice=inferential_choice or REQUIRED_INFERENTIAL_CHOICE)
+        self._inferential_choice_config = self.get_inferential_choice_config().from_dict(
+            inferential_choice or REQUIRED_INFERENTIAL_CHOICE
+        )
         self.n_members = n_members
         self.grid_points = grid_points
         self._y_min = -3.0
@@ -660,8 +669,8 @@ def test_variance_epistemic_with_known_value():
     """
     class StochasticMeansModel(ModelBase):
         """Model with stochastic means across S samples to generate epistemic uncertainty."""
-        def __init__(self, mean_approx=0.0, mean_samples=None, std=0.2, grid_points=512):
-            super().__init__()
+        def __init__(self, mean_approx=0.0, mean_samples=None, std=0.2, grid_points=512, inferential_choice=None):
+            super().__init__(inferential_choice=inferential_choice or REQUIRED_INFERENTIAL_CHOICE)
             self.mean_approx = mean_approx
             # Stochastic means for predict context: e.g., [-1, 0, 1] for 3 samples
             self.mean_samples = mean_samples if mean_samples is not None else np.array([-1.0, 0.0, 1.0])
@@ -881,6 +890,158 @@ def test_entropy_correctness_gaussian():
     # Should match within numerical integration tolerance
     np.testing.assert_allclose(computed, theoretical, rtol=1e-2, atol=1e-3,
                                 err_msg=f"Entropy should match theory: computed={computed}, theory={theoretical}")
+
+
+def test_entropy_epistemic_direct_kl():
+    """Entropy epistemic score should equal the direct KL average over predict samples."""
+    class DirectKLEntropyModel(ModelBase):
+        def __init__(self, inferential_choice=None):
+            super().__init__(inferential_choice=inferential_choice or REQUIRED_INFERENTIAL_CHOICE)
+            self._y_min = -4.0
+            self._y_max = 4.0
+
+        def fit(self, X, y, X_val=None, y_val=None):
+            pass
+
+        def predict_density(self, X, y_grid, context='predict'):
+            n = len(X)
+            if context == 'approximate':
+                dens = np.exp(-0.5 * ((y_grid[None, :] - 0.0) / 0.8) ** 2)
+                dens = dens / (np.sqrt(2 * np.pi * 0.8 ** 2) + 1e-12)
+                return np.repeat(dens, n, axis=0)
+
+            dens1 = np.exp(-0.5 * ((y_grid[None, :] + 0.5) / 0.6) ** 2)
+            dens1 = dens1 / (np.sqrt(2 * np.pi * 0.6 ** 2) + 1e-12)
+            dens2 = np.exp(-0.5 * ((y_grid[None, :] - 0.5) / 0.6) ** 2)
+            dens2 = dens2 / (np.sqrt(2 * np.pi * 0.6 ** 2) + 1e-12)
+            dens1 = np.repeat(dens1, n, axis=0)
+            dens2 = np.repeat(dens2, n, axis=0)
+            return np.stack([dens1, dens2], axis=0)
+
+        def sample_output(self, X, n_samples, rng=None):
+            rng = np.random.default_rng(rng)
+            N = X.shape[0]
+            return rng.normal(loc=0.0, scale=0.8, size=(n_samples, N, 1))
+
+        def output_bounds(self, X, q_low=1e-3, q_high=1-1e-3, pad_frac=0.05, n_samples=10000, rng=None):
+            rng = np.random.default_rng(rng)
+            samples = self.sample_output(X, min(n_samples, 10000), rng)
+            lows = np.quantile(samples, q_low, axis=0)[:, 0]
+            highs = np.quantile(samples, q_high, axis=0)[:, 0]
+            pad = (highs - lows) * pad_frac
+            return np.stack([lows - pad, highs + pad], axis=-1).reshape((-1, 1, 2))
+
+        def density_function_for_input(self, X):
+            def density(points, input_index=0):
+                pts = np.asarray(points).reshape(-1)
+                return np.exp(-0.5 * (pts / 0.8) ** 2) / (np.sqrt(2 * np.pi) * 0.8)
+            return density
+
+    model = DirectKLEntropyModel()
+    X = np.array([[0.0]])
+    y_grid = model.default_y_grid(X, grid_points=512, y_pad=1.0)
+
+    entropy = DifferentialEntropy(base=np.e, decomposition='epistemic', grid_points=512)
+    score = entropy.score(model, X)
+
+    dens_pred = model.predict_density(X, y_grid, context='predict')
+    dens_ref = model.predict_density(X, y_grid, context='approximate')
+    expected = np.mean(
+        [entropy._kl_divergence(dens_pred[s, 0, :], dens_ref[0, :], y_grid, np.e) for s in range(dens_pred.shape[0])]
+    )
+
+    np.testing.assert_allclose(score[0], expected, rtol=1e-6, atol=1e-6,
+                                err_msg="Entropy epistemic should equal the direct KL average")
+
+
+def test_entropy_requires_inferential_choices():
+    """Entropy should reject models that do not use predict=bma and approximate=posterior_predictive."""
+    model = GaussianDummyModel(inferential_choice={
+        'predict': 'posterior_predictive',
+        'approximate': 'point_estimate',
+    })
+    X = np.array([[0.0]])
+
+    entropy = DifferentialEntropy(base=np.e, decomposition='total', grid_points=256)
+
+    with pytest.raises(NotImplementedError):
+        entropy.score(model, X)
+
+
+def test_variance_requires_inferential_choices():
+    """Variance should reject models that do not use predict=bma and approximate=posterior_predictive."""
+    model = GaussianDummyModel(inferential_choice={
+        'predict': 'posterior_predictive',
+        'approximate': 'point_estimate',
+    })
+    X = np.array([[0.0]])
+
+    variance = PredictiveVariance(decomposition='total', grid_points=256)
+
+    with pytest.raises(NotImplementedError):
+        variance.score(model, X)
+
+
+def test_variance_total_explicit_bma():
+    """Variance total should explicitly average over both predict and approximate distributions."""
+    class ExplicitBMAVarianceModel(ModelBase):
+        def __init__(self, inferential_choice=None):
+            super().__init__(inferential_choice=inferential_choice or REQUIRED_INFERENTIAL_CHOICE)
+            self._y_min = -4.0
+            self._y_max = 4.0
+
+        def fit(self, X, y, X_val=None, y_val=None):
+            pass
+
+        def predict_density(self, X, y_grid, context='predict'):
+            n = len(X)
+            if context == 'approximate':
+                dens = np.exp(-0.5 * ((y_grid[None, :] - 0.0) / 0.9) ** 2)
+                dens = dens / (np.sqrt(2 * np.pi * 0.9 ** 2) + 1e-12)
+                return np.repeat(dens, n, axis=0)
+
+            dens1 = np.exp(-0.5 * ((y_grid[None, :] - 0.0) / 0.4) ** 2)
+            dens1 = dens1 / (np.sqrt(2 * np.pi * 0.4 ** 2) + 1e-12)
+            dens2 = np.exp(-0.5 * ((y_grid[None, :] - 0.0) / 1.2) ** 2)
+            dens2 = dens2 / (np.sqrt(2 * np.pi * 1.2 ** 2) + 1e-12)
+            dens1 = np.repeat(dens1, n, axis=0)
+            dens2 = np.repeat(dens2, n, axis=0)
+            return np.stack([dens1, dens2], axis=0)
+
+        def sample_output(self, X, n_samples, rng=None):
+            rng = np.random.default_rng(rng)
+            N = X.shape[0]
+            return rng.normal(loc=0.0, scale=0.9, size=(n_samples, N, 1))
+
+        def output_bounds(self, X, q_low=1e-3, q_high=1-1e-3, pad_frac=0.05, n_samples=10000, rng=None):
+            rng = np.random.default_rng(rng)
+            samples = self.sample_output(X, min(n_samples, 10000), rng)
+            lows = np.quantile(samples, q_low, axis=0)[:, 0]
+            highs = np.quantile(samples, q_high, axis=0)[:, 0]
+            pad = (highs - lows) * pad_frac
+            return np.stack([lows - pad, highs + pad], axis=-1).reshape((-1, 1, 2))
+
+        def density_function_for_input(self, X):
+            def density(points, input_index=0):
+                pts = np.asarray(points).reshape(-1)
+                return np.exp(-0.5 * (pts / 0.9) ** 2) / (np.sqrt(2 * np.pi) * 0.9)
+            return density
+
+    model = ExplicitBMAVarianceModel()
+    X = np.array([[0.0]])
+    y_grid = model.default_y_grid(X, grid_points=512, y_pad=1.0)
+
+    variance = PredictiveVariance(decomposition='total', grid_points=512)
+    score = variance.score(model, X)
+
+    dens_pred = model.predict_density(X, y_grid, context='predict')
+    dens_approx = model.predict_density(X, y_grid, context='approximate')
+    _, var_pred = PredictiveVariance._moments_from_density(dens_pred, y_grid)
+    _, var_approx = PredictiveVariance._moments_from_density(dens_approx, y_grid)
+    expected = np.concatenate([np.atleast_2d(var_pred), np.atleast_2d(var_approx)], axis=0).mean(axis=0)
+
+    np.testing.assert_allclose(score, expected, rtol=1e-6, atol=1e-6,
+                                err_msg="Variance total should be the explicit BMA over both contexts")
 
 
 # ============================================================================
@@ -1187,6 +1348,9 @@ def test_batch_heterogeneity():
     class HeterogeneousDummyModel(ModelBase):
         def fit(self, X, y, X_val=None, y_val=None):
             pass
+
+        def __init__(self, inferential_choice=None):
+            super().__init__(inferential_choice=inferential_choice or REQUIRED_INFERENTIAL_CHOICE)
         
         def predict_density(self, X, y_grid, context='predict'):
             n = len(X)
