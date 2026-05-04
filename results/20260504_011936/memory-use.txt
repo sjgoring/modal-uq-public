@@ -1,0 +1,7 @@
+sacct -j 33697759 --for
+mat=JobID,MaxRSS,State
+
+reveals max memory use was 3978684K ~ 4GB
+time taken was appx 50 mins.
+
+Implementation was not parallelised.
