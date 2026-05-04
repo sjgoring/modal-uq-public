@@ -15,6 +15,7 @@ import datetime
 class SelectivePrediction(ExperimentBase):
     def run(self):
         print("Running Selective Prediction experiment...")
+        print("[PHASE: Dataset Preparation] Starting...")
         # GT is available from experimental setup, so want to override this here.
         # In fact, this should probably be a feature of experiment base.
         if self.ds.needs_pseudo_ground_truth:
@@ -24,6 +25,7 @@ class SelectivePrediction(ExperimentBase):
             self.model.fit(self.ds.X_train, self.ds.y_train, self.ds.X_val, self.ds.y_val)
             y_mode_true = np.array([self.pgt.conditional_mode(x) for x in self.ds.X_test])
             y_grid = self.model.default_y_grid(self.ds.X_test)
+            self.y_grid = y_grid  # Cache y_grid to avoid recomputation
             y_mode_pred = self.model.predict_mode(self.ds.X_test, y_grid)
             self.X_test, self.y_test = self.ds.X_test, self.ds.y_test
         else:
@@ -41,8 +43,12 @@ class SelectivePrediction(ExperimentBase):
                 self.X_train, self.X_test, self.y_train, self.y_test = train_test_split(X, y, test_size=0.2, random_state = 42)
             
             self.y_train = np.expand_dims(self.y_train, axis=1) # Bodge to fix training for MDN. Todo: replace.
+            print("[PHASE: Dataset Preparation] Complete")
+            print("[PHASE: Model Training] Starting...")
             self.model.fit(self.X_train, self.y_train)
+            print("[PHASE: Model Training] Complete [OK]")
             y_grid = self.model.default_y_grid(self.X_test)
+            self.y_grid = y_grid  # Cache y_grid to avoid recomputation
             y_mode_pred = self.model.predict_mode(self.X_test, y_grid)
 
             if type(self.ds) is SyntheticConstantVarDataset:
@@ -57,25 +63,31 @@ class SelectivePrediction(ExperimentBase):
         unc_cfg = self.cfg.get('uncertainty')
         print("Uncertainty config:", unc_cfg)
         if unc_cfg:
-            # print("Computing uncertainty scores for selective analysis...")
+            print("[PHASE: Uncertainty Scoring] Starting... ({} measures)".format(len(unc_cfg['measures'])))
             # print(self.X_test.shape, self.y_test.shape)
             # print(self.X_test[:5], self.y_test[:5])
             df_scores = compute_uncertainty_scores(unc_cfg['measures'], self.model, self.X_test, self.y_test)
+            print("[PHASE: Uncertainty Scoring] Complete [OK]")
             corr_cfg = self.cfg.get('correlation', {})
             if corr_cfg.get('enabled', False):
+                print("[PHASE: Correlation Analysis] Starting...")
                 corrs, _ = correlation_suite(df_scores, corr_cfg.get('method', ['pearson','spearman']))
                 out_dir = corr_cfg.get('output_dir', 'runs/_correlation')
                 save_correlation_artifacts(df_scores, corrs, out_dir)
+                print("[PHASE: Correlation Analysis] Complete [OK]")
+            else:
+                print("[PHASE: Correlation Analysis] Skipped (disabled)")
             # Run selective analysis and save AUROC-style (risk vs % abstention) plots
-            print("Running selective analysis...")
+            print("[PHASE: Selective Analysis] Starting...")
             try:
                 out_dir = self.cfg.get('experiment', {}).get('run_root')
                 if out_dir is None:
                     ts = datetime.datetime.now().strftime("%Y%m%d_%H%M")
                     print(ts)
                     out_dir = os.path.join('runs', f"_selective\{ts}")
-                print(out_dir)
+                print("[PHASE: Selective Analysis] Output directory: {}".format(out_dir))
                 self.run_selective_analysis(df_scores, out_dir=out_dir)
+                print("[PHASE: Selective Analysis] Complete [OK]")
             except Exception:
                 # Do not fail experiment run if selective analysis errors; keep original behavior
                 print(Exception)

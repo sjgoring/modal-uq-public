@@ -3,10 +3,12 @@ import numpy as np
 from .base import InferentialChoiceConfig
 from .base import ModelBase
 from ..registry import register, build
+from joblib import Parallel, delayed
+from copy import deepcopy
 
 @register('model','ensemble')
 class Ensemble(ModelBase):
-    def __init__(self, base_model='condgmm', base_params=None, n_members=5, bootstrap=True, seed=42, inferential_choice=None):
+    def __init__(self, base_model='condgmm', base_params=None, n_members=5, bootstrap=True, seed=42, inferential_choice=None, n_jobs=None):
         super().__init__(inferential_choice=inferential_choice)
         self.base_model = base_model
         self.base_params = base_params or {}
@@ -16,6 +18,7 @@ class Ensemble(ModelBase):
         self.members = []
         self._y_min = None; self._y_max = None
         self._member_losses = None  # For selection by criterion
+        self.n_jobs = n_jobs  # Number of parallel jobs for compute-heavy operations
 
         if self.base_model == 'condgmm':
             default_cfg = InferentialChoiceConfig(
@@ -44,14 +47,17 @@ class Ensemble(ModelBase):
                 )
 
     def fit(self, X, y, X_val=None, y_val=None):
+        print("  Fitting ensemble with {} members...".format(self.n_members))
         rng = np.random.default_rng(self.seed)
-        self.members = []
         N = len(X)
-        from copy import deepcopy
-        for _ in range(self.n_members):
+
+        # Helper function for training a single member (parallelizable)
+        def _train_member(member_idx):
             model = build('model', self.base_model, **deepcopy(self.base_params))
             if self.bootstrap:
-                idx = rng.integers(0, N, size=N)
+                # Use fixed RNG seed per member for reproducibility
+                member_rng = np.random.default_rng(self.seed + member_idx)
+                idx = member_rng.integers(0, N, size=N)
                 X_m, y_m = X[idx], y[idx]
             else:
                 X_m, y_m = X, y
@@ -61,7 +67,26 @@ class Ensemble(ModelBase):
                 model.fit(X_m, y_m)
             else:
                 raise NotImplementedError(f"Base model '{self.base_model}' is not supported in Ensemble.")
-            self.members.append(model)
+            return model
+
+        # Parallelize member training
+        n_jobs = self.n_jobs if self.n_jobs is not None else 1
+        if n_jobs == 1:
+            # Serial execution
+            self.members = []
+            for member_idx in range(self.n_members):
+                model = _train_member(member_idx)
+                self.members.append(model)
+                print("    Member {}/{} fitted".format(member_idx + 1, self.n_members))
+        else:
+            # Parallel execution
+            self.members = Parallel(n_jobs=n_jobs, backend='threading')(
+                delayed(_train_member)(member_idx) for member_idx in range(self.n_members)
+            )
+            for member_idx in range(self.n_members):
+                print("    Member {}/{} fitted".format(member_idx + 1, self.n_members))
+
+        print("  [OK] Ensemble fitting complete")
         self._y_min = float(y.min()); self._y_max = float(y.max())
         
         # Compute member losses for criterion-based selection
@@ -71,18 +96,29 @@ class Ensemble(ModelBase):
         """Compute losses for each member for criterion-based selection."""
         if y_grid is None:
             y_grid = self.default_y_grid(X)
-        self._member_losses = []
-        for member in self.members:
+
+        # Helper function for computing loss for a single member (parallelizable)
+        def _compute_loss_for_member(member):
             dens = member.predict_density(X, y_grid)  # [N, G]
             # Evaluate density at true labels for each sample
-            dens_at_y = []
-            for i in range(len(y)):
-                density_at_i = np.interp(y[i], y_grid, dens[i], left=0, right=0)
-                dens_at_y.append(density_at_i)
-            dens_at_y = np.array(dens_at_y)
+            dens_at_y = np.array([
+                np.interp(y[i], y_grid, dens[i], left=0, right=0)
+                for i in range(len(y))
+            ])
             dens_at_y = np.clip(dens_at_y, 1e-12, None)  # Avoid log(0)
             nll = -np.mean(np.log(dens_at_y))  # Negative log likelihood
-            self._member_losses.append(nll)
+            return nll
+
+        # Parallelize loss computation
+        n_jobs = self.n_jobs if self.n_jobs is not None else 1
+        if n_jobs == 1:
+            # Serial execution
+            self._member_losses = [_compute_loss_for_member(member) for member in self.members]
+        else:
+            # Parallel execution
+            self._member_losses = Parallel(n_jobs=n_jobs, backend='threading')(
+                delayed(_compute_loss_for_member)(member) for member in self.members
+            )
         self._member_losses = np.array(self._member_losses)
     
     def _select_member_by_criterion(self, criterion):

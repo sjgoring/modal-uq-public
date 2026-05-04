@@ -4,6 +4,7 @@ from ..models.base import InferentialChoiceConfig
 from ..registry import register
 import scipy.integrate as integrate
 from scipy.interpolate import interp1d
+from joblib import Parallel, delayed
 
 from modal_uq.models.ensemble import Ensemble
 
@@ -26,7 +27,7 @@ class QUESTUncertainty(UncertaintyBase):
     The epistemic component for HDR-based measures requires domain-specific analysis
     and is left as a stub for future implementation.
     """
-    def __init__(self, alpha=None, decomposition='total', scope='local', grid_points=512, y_pad=1.0, n_param_samples=20, mc_n_samples=100000, mc_random_state=None, bounds_q_low=1e-3, bounds_q_high=1.0-1e-3, bounds_pad_frac=0.05, n_alpha=100):
+    def __init__(self, alpha=None, decomposition='total', scope='local', grid_points=512, y_pad=1.0, n_param_samples=20, mc_n_samples=100000, mc_random_state=None, bounds_q_low=1e-3, bounds_q_high=1.0-1e-3, bounds_pad_frac=0.05, n_alpha=100, n_jobs=None):
     # def __init__(self, alpha, decomposition='total', grid_points=10000, y_pad=1.0, n_param_samples=20):
         assert decomposition in {'total','aleatoric','epistemic'}
         self.alpha = alpha
@@ -42,6 +43,7 @@ class QUESTUncertainty(UncertaintyBase):
         self.bounds_q_high = bounds_q_high
         self.bounds_pad_frac = bounds_pad_frac
         self.n_alpha = n_alpha
+        self.n_jobs = n_jobs  # Number of parallel jobs for per-input loops
 
         if self.alpha == None and scope == 'local':
             raise ValueError("alpha must be provided for local scope.")
@@ -308,22 +310,34 @@ class QUESTUncertainty(UncertaintyBase):
         rng = np.random.default_rng(random_state or self.mc_random_state)
         samples = sampler(X, n_samples, rng)  # (n_samples, N, d)
         samples = np.asarray(samples)
-        n_samples, N, d = samples.shape
+        n_samples_local, N, d = samples.shape
 
-        c_alpha = np.zeros(N)
-        sample_mask = np.zeros((n_samples, N), dtype=bool)
-
-        for i in range(N):
+        # Helper function for per-input computation (parallelizable)
+        def _compute_hdr_threshold_for_input(i):
             pts = samples[:, i, :]
             dens_vals = density_func(pts, input_index=i)
             dens_vals = np.asarray(dens_vals).ravel()
             # sort densities descending
             idx = np.argsort(-dens_vals)
             sorted_dens = dens_vals[idx]
-            cutoff_idx = max(0, int(np.ceil((1.0 - alpha) * n_samples)) - 1)
+            cutoff_idx = max(0, int(np.ceil((1.0 - alpha) * n_samples_local)) - 1)
             thresh = sorted_dens[cutoff_idx]
-            c_alpha[i] = thresh
-            sample_mask[:, i] = dens_vals >= thresh
+            mask = dens_vals >= thresh
+            return thresh, mask
+
+        # Parallelize over inputs
+        n_jobs = self.n_jobs if hasattr(self, 'n_jobs') and self.n_jobs is not None else 1
+        if n_jobs == 1:
+            # Serial execution
+            results = [_compute_hdr_threshold_for_input(i) for i in range(N)]
+        else:
+            # Parallel execution
+            results = Parallel(n_jobs=n_jobs, backend='threading')(
+                delayed(_compute_hdr_threshold_for_input)(i) for i in range(N)
+            )
+
+        c_alpha = np.array([r[0] for r in results])
+        sample_mask = np.stack([r[1] for r in results], axis=1)  # (n_samples, N)
 
         def hdr_indicator(query_points, input_index=0):
             q = np.asarray(query_points)
@@ -342,9 +356,9 @@ class QUESTUncertainty(UncertaintyBase):
         rng = np.random.default_rng(random_state or self.mc_random_state)
         bounds = np.asarray(bounds)
         N, d, two = bounds.shape
-        volumes = np.zeros(N)
-        fractions = np.zeros(N)
-        for i in range(N):
+
+        # Helper function for per-input computation (parallelizable)
+        def _compute_volume_for_input(i):
             lows = bounds[i, :, 0]
             highs = bounds[i, :, 1]
             U = rng.uniform(lows, highs, size=(n_samples, d))
@@ -352,8 +366,22 @@ class QUESTUncertainty(UncertaintyBase):
             inside = np.asarray(dens_vals).ravel() >= c_alpha[i]
             fraction_inside = np.mean(inside)
             box_vol = float(np.prod(highs - lows))
-            volumes[i] = box_vol * fraction_inside
-            fractions[i] = fraction_inside
+            volume = box_vol * fraction_inside
+            return volume, fraction_inside
+
+        # Parallelize over inputs
+        n_jobs = self.n_jobs if hasattr(self, 'n_jobs') and self.n_jobs is not None else 1
+        if n_jobs == 1:
+            # Serial execution
+            results = [_compute_volume_for_input(i) for i in range(N)]
+        else:
+            # Parallel execution
+            results = Parallel(n_jobs=n_jobs, backend='threading')(
+                delayed(_compute_volume_for_input)(i) for i in range(N)
+            )
+
+        volumes = np.array([r[0] for r in results])
+        fractions = np.array([r[1] for r in results])
         return volumes, fractions
 
     def _grid_helper(self, grid):

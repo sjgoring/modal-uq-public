@@ -51,15 +51,15 @@ class CondGMM(ModelBase):
             # CondGMM is deterministic, so we return the same density regardless of the inferential choice.
             pass
 
-        dens = np.zeros((X.shape[0], y.shape[0]))
         gmms = self.model.condition(X)  # Returns list of sklearn GaussianMixture for each X.
-        
+
         if not isinstance(gmms, Iterable):
             gmms = [gmms] * X.shape[0]
 
-        for gmm, idx in zip(gmms, range(X.shape[0])):
-            dens[idx] = gmm.score_samples(y.reshape(-1, 1))  # log density
-            dens[idx] = np.exp(dens[idx])  # convert log density to density
+        # Vectorized scoring: compute log-densities for each conditional GMM and stack.
+        log_dens_list = [gmm.score_samples(y.reshape(-1, 1)) for gmm in gmms]
+        dens = np.vstack(log_dens_list)  # shape: (N, len(y))
+        dens = np.exp(dens)  # convert log density to density
         return dens
 
     # Deterministic models should not override this method, as they do not provide a second-order distribution. The default implementation raises NotImplementedError to indicate that this functionality is not available for CondGMM.

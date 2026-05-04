@@ -52,6 +52,7 @@ def _make_run_root(base_output_dir):
 def run_from_config(config_path: str):
     cfg = read_json(config_path)
     exp_cfg = cfg.get('experiment', {})
+    exp_n_jobs = exp_cfg.get('n_jobs', -2)
     base_output_dir = exp_cfg.get('output_dir', 'runs')
     run_root = _make_run_root(base_output_dir)
     write_json(cfg, os.path.join(run_root, 'config.json'))
@@ -85,12 +86,18 @@ def run_from_config(config_path: str):
             if 'inferential_choice' in model_cfg:
                 model_params['inferential_choice'] = model_cfg['inferential_choice']
             model = build('model', model_cfg['name'], **model_params)
+            # Propagate configured n_jobs to the model instance for downstream use
+            try:
+                setattr(model, 'n_jobs', exp_n_jobs)
+            except Exception:
+                pass
 
             # ---- Experiment ----
             exp = build(
                 'experiment',
                 cfg['experiment']['type'],
-                ds=ds, pgt=pgt, model=model, metrics=cfg.get('metrics',{}), cfg=cfg
+                ds=ds, pgt=pgt, model=model, metrics=cfg.get('metrics',{}), cfg=cfg,
+                n_jobs=exp_n_jobs,
             )
             exp.run(); exp.report()
         except Exception:

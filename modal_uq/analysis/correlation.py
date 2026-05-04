@@ -17,8 +17,17 @@ def compute_uncertainty_scores(measure_specs, model, X, y=None):
         # 2) Pop the optional label so it doesn't get passed to the constructor
         label = params.pop('label', None)
 
-        # 3) Build the scorer with the cleaned params
+        # 3) Propagate model-level n_jobs to the scorer if not already specified
+        if 'n_jobs' not in params and hasattr(model, 'n_jobs'):
+            params['n_jobs'] = getattr(model, 'n_jobs', None)
+
+        # 4) Build the scorer with the cleaned params (including n_jobs if available)
         u = build('uncertainty', spec['name'], **params)
+
+        # Print per-measure progress
+        measure_name = spec['name']
+        measure_label = label if label else measure_name
+        print("  Computing uncertainty measure: {} ({})".format(measure_label, measure_name))
 
         # 4) Compute the score
         # print("Test prints - correlation.py - compute_uncertainty_scores")
@@ -26,6 +35,9 @@ def compute_uncertainty_scores(measure_specs, model, X, y=None):
         # print(X[:5], y[:5] if y is not None else None)
         # 23:10 02/03 - appears ok.
         s = u.score(model, X, y)
+
+        # Print completion
+        print("  [OK] {} complete".format(measure_label))
 
         # 5) Name the column: label (if provided) else measure name
         key = label if label else spec['name']

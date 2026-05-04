@@ -6,9 +6,10 @@ import scipy.integrate as integrate
 
 @register('uncertainty','nll')
 class NLLScore(UncertaintyBase):
-    def __init__(self, decomposition='total'):
+    def __init__(self, decomposition='total', n_jobs=None):
         assert decomposition in {'total', 'aleatoric', 'epistemic'}
         self.decomposition = decomposition
+        self.n_jobs = n_jobs  # Number of parallel jobs for compute-heavy operations
 
     def score_total(self, model, X, y_true=None):
         if y_true is None:
@@ -39,9 +40,10 @@ class NLLScore(UncertaintyBase):
 
 @register('uncertainty','crps_proxy')
 class CRPSProxy(UncertaintyBase):
-    def __init__(self, decomposition='total'):
+    def __init__(self, decomposition='total', n_jobs=None):
         assert decomposition in {'total', 'aleatoric', 'epistemic'}
         self.decomposition = decomposition
+        self.n_jobs = n_jobs  # Number of parallel jobs for compute-heavy operations
 
     def score_total(self, model, X, y_true=None):
         y_grid = model.default_y_grid(X)

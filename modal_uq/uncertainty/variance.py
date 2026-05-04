@@ -19,12 +19,13 @@ class PredictiveVariance(UncertaintyBase):
     - aleatoric:  BMA of the variance measure over all predict samples
     - epistemic:  BMA of the squared deviation of each candidate mean from the posterior predictive mean
     """
-    def __init__(self, decomposition='total', grid_points=512, y_pad=1.0, n_param_samples=20):
+    def __init__(self, decomposition='total', grid_points=512, y_pad=1.0, n_param_samples=20, n_jobs=None):
         assert decomposition in {'total','aleatoric','epistemic'}
         self.decomposition = decomposition
         self.grid_points = grid_points
         self.y_pad = y_pad
         self.n_param_samples = n_param_samples
+        self.n_jobs = n_jobs  # Number of parallel jobs for compute-heavy operations
 
     @staticmethod
     def _normalize_last_axis(arr, y_grid):

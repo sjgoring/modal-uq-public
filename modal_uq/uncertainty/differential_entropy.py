@@ -20,13 +20,14 @@ class DifferentialEntropy(UncertaintyBase):
     - aleatoric:  BMA of the entropy measure over candidate distributions
     - epistemic:  BMA of KL(predict sample || approximate reference)
     """
-    def __init__(self, base=np.e, decomposition='total', grid_points=512, y_pad=1.0, n_param_samples=20):
+    def __init__(self, base=np.e, decomposition='total', grid_points=512, y_pad=1.0, n_param_samples=20, n_jobs=None):
         assert decomposition in {'total','aleatoric','epistemic'}
         self.base = base
         self.decomposition = decomposition
         self.grid_points = grid_points
         self.y_pad = y_pad
         self.n_param_samples = n_param_samples
+        self.n_jobs = n_jobs  # Number of parallel jobs for compute-heavy operations
 
     @staticmethod
     def _normalize_last_axis(arr, y_grid):

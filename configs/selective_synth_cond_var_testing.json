@@ -51,7 +51,7 @@
   ]
 },
   "correlation": {
-    "enabled": true,
+    "enabled": false,
     "method": [
       "pearson",
       "spearman"
