@@ -117,8 +117,8 @@ class SyntheticConstantVarDataset:
 
         Returns X, y, global_mode (array), mode_ids, and y_densities (list of densities on y_grid)
         """
-        X = self.sample_x()
-        y_grid = np.linspace(self.y_min, self.y_max, self.y_grid_size)
+        X = self.sample_x() # shape (n_samples, 1)
+        y_grid = np.linspace(self.y_min, self.y_max, self.y_grid_size) # shape (y_grid_size,)
 
         pi1, pi2, mu_1, mu_2, sigma_1, sigma_2 = self._mixture_params(X)
 
