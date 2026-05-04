@@ -1,7 +1,14 @@
 {
+    "seeds": {
+    "experiment": 1,
+    "dataset": 1,
+    "model": 1,
+    "pgt": 1,
+    "uncertainty": 1
+  },
+  
   "experiment": {
     "type": "selective",
-    "seed": 42,
     "output_dir": "runs/selective_synth_cond_var_testing",
     "needs_psuedo_ground_truth": false
   },

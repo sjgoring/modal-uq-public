@@ -39,6 +39,7 @@ class _TimestampedTee:
     def _write_line(self, line):
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         self._log_handle.write(f"{timestamp} | {self._source_label} | {line}\n")
+        self._log_handle.flush()
 
 
 @contextmanager
@@ -65,16 +66,39 @@ def capture_stdout_stderr(log_path):
         log_handle.flush()
         log_handle.close()
 
-def get_logger(name='modal_uq'):
+def get_logger(name='modal_uq', log_path=None):
     logger = logging.getLogger(name)
     logger.setLevel(logging.INFO)
-    if not logger.handlers:
-        h = logging.StreamHandler(sys.stdout)
-        fmt = logging.Formatter('%(asctime)s | %(levelname)s | %(message)s')
-        h.setFormatter(fmt)
-        logger.addHandler(h)
-    else:
-        for handler in logger.handlers:
-            if isinstance(handler, logging.StreamHandler):
-                handler.stream = sys.stdout
+    logger.propagate = False
+
+    fmt = logging.Formatter('%(asctime)s | %(levelname)s | %(message)s')
+    terminal_stream = getattr(sys.stdout, "_stream", sys.stdout)
+
+    stream_handler = None
+    file_handler = None
+
+    for handler in list(logger.handlers):
+        if isinstance(handler, logging.FileHandler):
+            if log_path is not None and Path(handler.baseFilename) == Path(log_path):
+                file_handler = handler
+                file_handler.setFormatter(fmt)
+            else:
+                logger.removeHandler(handler)
+                handler.close()
+        elif isinstance(handler, logging.StreamHandler):
+            stream_handler = handler
+            stream_handler.stream = terminal_stream
+            stream_handler.setFormatter(fmt)
+
+    if stream_handler is None:
+        stream_handler = logging.StreamHandler(terminal_stream)
+        stream_handler.setFormatter(fmt)
+        logger.addHandler(stream_handler)
+
+    if log_path is not None and file_handler is None:
+        Path(log_path).parent.mkdir(parents=True, exist_ok=True)
+        file_handler = logging.FileHandler(log_path, mode='a', encoding='utf-8')
+        file_handler.setFormatter(fmt)
+        logger.addHandler(file_handler)
+
     return logger

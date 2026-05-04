@@ -12,6 +12,7 @@ import scipy.integrate as integrate
 import pandas as pd
 import matplotlib.pyplot as plt
 from typing import Optional, Sequence, Tuple, Union, Callable, Dict
+from ..utils.seed import allocate_seed, derive_seed
 # from ..registry import register
 
 # @register('dataset','synthetic_conditional')
@@ -254,13 +255,13 @@ class SyntheticMultiModalConditionalDataset:
         self.component_df = component_df
         self.mode_scales = np.array(mode_scales if isinstance(mode_scales, (list, np.ndarray)) else [mode_scales]*n_modes)
         self.mode_weights = np.array(mode_weights) if mode_weights is not None else np.ones(n_modes) / n_modes
-        self.seed_master = seed_master
+        self.seed_master = seed_master if seed_master is not None else allocate_seed()
         self.x_sampler = x_sampler
         self.x_sampler_params = x_sampler_params or {}
-        # Derive seeds if only master is set
-        self.seed_mode_assign = seed_mode_assign if seed_mode_assign is not None else (hash((seed_master, 'assign')) % 2**32 if seed_master is not None else None)
-        self.seed_sample = seed_sample if seed_sample is not None else (hash((seed_master, 'sample')) % 2**32 if seed_master is not None else None)
-        self.seed_noise = seed_noise if seed_noise is not None else (hash((seed_master, 'noise')) % 2**32 if seed_master is not None else None)
+        # Derive stable child seeds from the master seed.
+        self.seed_mode_assign = seed_mode_assign if seed_mode_assign is not None else derive_seed(self.seed_master, 'assign')
+        self.seed_sample = seed_sample if seed_sample is not None else derive_seed(self.seed_master, 'sample')
+        self.seed_noise = seed_noise if seed_noise is not None else derive_seed(self.seed_master, 'noise')
         # Generators
         self.rng_mode_assign = np.random.default_rng(self.seed_mode_assign)
         self.rng_sample = np.random.default_rng(self.seed_sample)

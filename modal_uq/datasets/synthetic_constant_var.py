@@ -23,6 +23,7 @@ class SyntheticConstantVarDataset:
         y_grid_size: int = 1000,
         pi_1: float = 0.6,
         seed: Optional[int] = 42,
+        split_seed: Optional[int] = None,
         x_sampler: str = 'grid',
     ):
         self.n_samples = n_samples

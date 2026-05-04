@@ -6,6 +6,7 @@ from ..registry import build
 from ..analysis.correlation import compute_uncertainty_scores, correlation_suite, save_correlation_artifacts
 from ..utils.io import write_json
 from ..utils.logging import get_logger
+from ..utils.seed import resolve_seed
 from ..analysis import plotting
 
 class ActiveLearning(ExperimentBase):
@@ -20,7 +21,7 @@ class ActiveLearning(ExperimentBase):
         acq = build('acquisition', acq_name, **acq_params)
 
         # reproducible RNG from experiment seed
-        seed = self.cfg.get('experiment', {}).get('seed', 42)
+        seed = resolve_seed(self.cfg.get('experiment', {}).get('seed'))
         rng = np.random.default_rng(seed)
 
         X_pool, y_pool = self.ds.X_train.copy(), self.ds.y_train.copy()

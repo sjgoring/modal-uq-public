@@ -352,16 +352,22 @@ class QUESTUncertainty(UncertaintyBase):
         bounds: (N, d, 2)
         Returns: volumes (N,), fractions_inside (N,)
         """
+        from modal_uq.utils.seed import derive_seed, resolve_seed
+        
         n_samples = int(n_samples or self.mc_n_samples)
-        rng = np.random.default_rng(random_state or self.mc_random_state)
+        resolved_seed = resolve_seed(random_state or self.mc_random_state)
         bounds = np.asarray(bounds)
         N, d, two = bounds.shape
 
         # Helper function for per-input computation (parallelizable)
         def _compute_volume_for_input(i):
+            # Derive per-input seed for deterministic results across thread scheduling
+            input_seed = derive_seed(resolved_seed, "volume", i)
+            input_rng = np.random.default_rng(input_seed)
+            
             lows = bounds[i, :, 0]
             highs = bounds[i, :, 1]
-            U = rng.uniform(lows, highs, size=(n_samples, d))
+            U = input_rng.uniform(lows, highs, size=(n_samples, d))
             dens_vals = density_func(U, input_index=i)
             inside = np.asarray(dens_vals).ravel() >= c_alpha[i]
             fraction_inside = np.mean(inside)

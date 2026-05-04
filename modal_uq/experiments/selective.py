@@ -7,6 +7,7 @@ from ..analysis.correlation import compute_uncertainty_scores, correlation_suite
 from ..metrics.selective import risk_coverage, aurc
 from ..metrics import mode_errors
 from ..utils import io as io_utils
+from ..utils.seed import resolve_seed
 import matplotlib.pyplot as plt
 from sklearn.model_selection import train_test_split
 from ..datasets.synthetic_constant_var import SyntheticConstantVarDataset
@@ -35,12 +36,16 @@ class SelectivePrediction(ExperimentBase):
                 X, y, _, _, _ = self.ds.get_data() # get n_samples
                 self.X_train, self.y_train = X, y
                 self.X_test, self.y_test, _, _, _ = self.ds.get_data() # get n_samples worth again, but this time keep only 0.2 for testing. Todo: Re-write to be more efficient and less hacky.
-                _, self.X_test, _, self.y_test = train_test_split(self.X_test, self.y_test, test_size=0.2, random_state = 42)
+                split_seed = self.cfg.get('dataset', {}).get('params', {}).get('split_seed')
+                split_seed = resolve_seed(split_seed)
+                _, self.X_test, _, self.y_test = train_test_split(self.X_test, self.y_test, test_size=0.2, random_state=split_seed)
 
             else:
                 # For experiment: Selective_Synthetic only. Todo: General re-write.
                 X, y, _, _ = self.ds.get_data(pi_fn=self.ds.test_pi_fn, mu_fn=self.ds.test_mu_fn, sigma_fn=self.ds.test_sigma_fn, noise_fn=self.ds.test_no_fn)
-                self.X_train, self.X_test, self.y_train, self.y_test = train_test_split(X, y, test_size=0.2, random_state = 42)
+                split_seed = self.cfg.get('dataset', {}).get('params', {}).get('split_seed')
+                split_seed = resolve_seed(split_seed)
+                self.X_train, self.X_test, self.y_train, self.y_test = train_test_split(X, y, test_size=0.2, random_state=split_seed)
             
             self.y_train = np.expand_dims(self.y_train, axis=1) # Bodge to fix training for MDN. Todo: replace.
             print("[PHASE: Dataset Preparation] Complete")

@@ -5,6 +5,7 @@ from ..analysis.correlation import compute_uncertainty_scores, correlation_suite
 from ..analysis import ood_gen, ood_metrics, plotting
 from ..utils.logging import get_logger
 from ..utils.io import write_json
+from ..utils.seed import resolve_seed
 
 
 class OODExperiment(ExperimentBase):
@@ -36,7 +37,7 @@ class OODExperiment(ExperimentBase):
         method = ood_cfg.get('method', 'shift')
         params = ood_cfg.get('params', {})
         n_ood = int(ood_cfg.get('n_ood_samples', max(100, len(X_id))))
-        seed = ood_cfg.get('seed', self.cfg.get('experiment', {}).get('seed', None))
+        seed = resolve_seed(ood_cfg.get('seed', self.cfg.get('experiment', {}).get('seed', None)))
 
         # Generate OOD inputs
         try:

@@ -276,6 +276,10 @@ class Ensemble(ModelBase):
         samples_list = []
         
         from scipy.stats import gaussian_kde
+        from modal_uq.utils.seed import derive_seed
+        
+        # Use the random_state as base seed (should already be resolved to int by caller)
+        base_seed = random_state if isinstance(random_state, int) else 0
         
         for idx in range(X.shape[0]):
             # Drop first param (mixture weights) to avoid rank degeneracy from constraint (weights sum to 1)
@@ -286,9 +290,9 @@ class Ensemble(ModelBase):
             except Exception as e:
                 raise RuntimeError(f"Error fitting KDE for sample {idx}: {e}")
             
-            # Pre-sample from KDE for HDR thresholding
-            # Note: gaussian_kde.resample doesn't accept random_state, so we use the rng's integers to seed it
-            mc_samples = kde.resample(size=n_mc_samples)  # [n_params-1, n_mc_samples]
+            # Pre-sample from KDE for HDR thresholding using per-input derived seed for determinism
+            input_seed = derive_seed(base_seed, "kde_sample", idx)
+            mc_samples = kde.resample(size=n_mc_samples, seed=input_seed)  # [n_params-1, n_mc_samples]
             mc_samples = mc_samples.T  # -> [n_mc_samples, n_params-1]
             
             kdes_list.append(kde)

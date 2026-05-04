@@ -1,7 +1,13 @@
 {
+    "seeds": {
+    "experiment": null,
+    "dataset": null,
+    "model": null,
+    "pgt": null,
+    "uncertainty": null
+  },
   "experiment": {
     "type": "selective",
-    "seed": 42,
     "output_dir": "runs/selective_synth_cond_var_testing",
     "needs_psuedo_ground_truth": false
   },
@@ -24,6 +30,7 @@
   "params": {
     "base_model" : "condgmm",
           "n_members" : 6,
+          "seed": 42,
           "base_params": {
             "n_components": 2
       }
@@ -42,11 +49,11 @@
     { "name": "variance", "params": { "decomposition": "total",     "label": "variance_total" } },
     { "name": "variance", "params": { "decomposition": "aleatoric",     "label": "variance_aleatoric" } },
     { "name": "variance", "params": { "decomposition": "epistemic",     "label": "variance_epistemic" } },
-    { "name": "alpha_volume", "params": { "decomposition": "total",     "label": "alpha_volume_total_5%", "alpha": 0.05} },
-    { "name": "alpha_volume", "params": { "decomposition": "aleatoric",     "label": "alpha_volume_aleatoric_5%", "alpha": 0.05} },
-    { "name": "alpha_volume", "params": { "decomposition": "epistemic",     "label": "alpha_volume_epistemic_5%", "alpha": 0.05} },
-    { "name": "integrated_volume", "params": { "decomposition": "total", "scope": "global",     "label": "integrated_volume_total", "mc_n_samples": 100, "n_alpha":10 } },
-    { "name": "integrated_volume", "params": { "decomposition": "aleatoric", "scope": "global",     "label": "integrated_volume_aleatoric", "mc_n_samples": 100, "n_alpha":10 } },
+    { "name": "alpha_volume", "params": { "decomposition": "total",     "label": "alpha_volume_total_5%", "alpha": 0.05 } },
+    { "name": "alpha_volume", "params": { "decomposition": "aleatoric",     "label": "alpha_volume_aleatoric_5%", "alpha": 0.05 } },
+    { "name": "alpha_volume", "params": { "decomposition": "epistemic",     "label": "alpha_volume_epistemic_5%", "alpha": 0.05 } },
+    { "name": "integrated_volume", "params": { "decomposition": "total", "scope": "global",     "label": "integrated_volume_total", "mc_n_samples": 100, "n_alpha":10  } },
+    { "name": "integrated_volume", "params": { "decomposition": "aleatoric", "scope": "global",     "label": "integrated_volume_aleatoric", "mc_n_samples": 100, "n_alpha":10  } },
     { "name": "integrated_volume", "params": { "decomposition": "epistemic", "scope": "global",     "label": "integrated_volume_epistemic", "mc_n_samples": 100, "n_alpha":10 } }
   ]
 },

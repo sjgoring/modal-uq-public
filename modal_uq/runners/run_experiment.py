@@ -5,7 +5,7 @@ import os
 import traceback
 
 from ..registry import build, register
-from ..utils.seed import set_seed
+from ..utils.seed import resolve_runtime_seeds, set_seed
 from ..utils.logging import capture_stdout_stderr, get_logger
 
 from ..experiments.selective import SelectivePrediction
@@ -51,21 +51,20 @@ def _make_run_root(base_output_dir):
 
 def run_from_config(config_path: str):
     cfg = read_json(config_path)
+    cfg = resolve_runtime_seeds(copy.deepcopy(cfg))
     exp_cfg = cfg.get('experiment', {})
     exp_n_jobs = exp_cfg.get('n_jobs', -2)
     base_output_dir = exp_cfg.get('output_dir', 'runs')
     run_root = _make_run_root(base_output_dir)
-    write_json(cfg, os.path.join(run_root, 'config.json'))
-
-    cfg = copy.deepcopy(cfg)
     cfg.setdefault('experiment', {})['run_root'] = run_root
+    write_json(cfg, os.path.join(run_root, 'config.json'))
 
     log_path = os.path.join(run_root, 'run.log')
     with capture_stdout_stderr(log_path):
-        logger = get_logger(__name__)
+        logger = get_logger(__name__, log_path=log_path)
         logger.info("Run root: %s", run_root)
         logger.info("Config saved to %s", os.path.join(run_root, 'config.json'))
-        set_seed(cfg.get('experiment',{}).get('seed', 42))
+        set_seed(cfg.get('experiment', {}).get('seed'))
         try:
             # ---- Dataset ----
             ds_cfg = cfg['dataset']
