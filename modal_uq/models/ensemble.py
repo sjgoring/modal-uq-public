@@ -53,9 +53,13 @@ class Ensemble(ModelBase):
         rng = np.random.default_rng(self.seed)
         N = len(X)
 
+        # Build one prototype so workers deepcopy it instead of calling build()
+        # (loky workers start with an empty registry, so build() would fail there)
+        prototype = build('model', self.base_model, **deepcopy(self.base_params))
+
         # Helper function for training a single member (parallelizable)
         def _train_member(member_idx):
-            model = build('model', self.base_model, **deepcopy(self.base_params))
+            model = deepcopy(prototype)
             if self.bootstrap:
                 # Use fixed RNG seed per member for reproducibility
                 member_rng = np.random.default_rng(self.seed + member_idx)
@@ -81,8 +85,9 @@ class Ensemble(ModelBase):
                 self.members.append(model)
                 print("    Member {}/{} fitted".format(member_idx + 1, self.n_members))
         else:
-            # Parallel execution
-            self.members = Parallel(n_jobs=n_jobs, backend='threading')(
+            # Parallel execution — loky (process-based) avoids shared-state deadlocks
+            # that occur with backend='threading' when sklearn/BLAS use their own locks
+            self.members = Parallel(n_jobs=n_jobs, backend='loky')(
                 delayed(_train_member)(member_idx) for member_idx in range(self.n_members)
             )
             for member_idx in range(self.n_members):
