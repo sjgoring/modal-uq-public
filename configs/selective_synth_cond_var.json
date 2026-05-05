@@ -43,6 +43,7 @@
   },
   "uncertainty": {
   "measures": [
+    {"name": "random", "params": { "label": "random" } },
     { "name": "differential_entropy", "params": { "decomposition": "total",     "label": "differential_entropy_total" } },
     { "name": "differential_entropy", "params": { "decomposition": "aleatoric",     "label": "differential_entropy_aleatoric" } },
     { "name": "differential_entropy", "params": { "decomposition": "epistemic",     "label": "differential_entropy_epistemic" } },
