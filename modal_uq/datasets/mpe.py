@@ -26,12 +26,17 @@ class MpeDataset:
         data_path: str = "data/raw/mpe.npz",
         seed: Optional[int] = 42,
         split_seed: Optional[int] = None,
+        y_grid_size: int = 1000,
+        y_pad: float = 1.0,
     ):
         self.n_samples = n_samples
         self.data_path = data_path
         self.seed = seed
         self.rng = np.random.default_rng(seed)
         self.needs_pseudo_ground_truth = False
+        self.y_grid_size = y_grid_size
+        self.y_min, self.y_max = None, None
+        self.y_pad = y_pad
 
         # Populate X_raw / y_raw and train/val/test splits
         self.get_data()
@@ -62,6 +67,11 @@ class MpeDataset:
         self.X_test = X_test
         self.y_test = y_test
 
+    def _make_y_grid(self) -> np.ndarray:
+        y_span = self.y_max - self.y_min
+        pad = self.y_pad * (y_span + 1e-6)
+        return np.linspace(self.y_min - pad, self.y_max + pad, self.y_grid_size)
+
     def get_data(self) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """Load dataset from the npz file.
 
@@ -74,8 +84,8 @@ class MpeDataset:
         self.X_raw = X
         self.y_raw = y
 
-        y_min, y_max = float(y.min()), float(y.max())
-        y_grid = np.linspace(y_min, y_max, 200)
+        self.y_min, self.y_max = float(y.min()), float(y.max())
+        self.y_grid = self._make_y_grid()
 
         y_densities = []
         modes = np.empty(X.shape[0])
@@ -83,16 +93,16 @@ class MpeDataset:
         for i in range(X.shape[0]):
             samples = y[i]      # 50 trajectory samples
             kde = gaussian_kde(samples)
-            dens = kde(y_grid)
-            dens = dens / integrate.trapezoid(dens, y_grid)
+            dens = kde(self.y_grid)
+            dens = dens / integrate.trapezoid(dens, self.y_grid)
             y_densities.append(dens)
-            modes[i] = y_grid[np.argmax(dens)]
+            modes[i] = self.y_grid[np.argmax(dens)]
 
         # mode_ids: placeholder zeros (no discrete mixture components for MPE)
         mode_ids = np.zeros(X.shape[0], dtype=int)
         global_mode = np.array([modes.mean()])
 
-        return X, y, global_mode, mode_ids, np.vstack(y_densities), y_grid
+        return X, y, global_mode, mode_ids, np.vstack(y_densities), self.y_grid
 
     def gt(self, X: np.ndarray) -> np.ndarray:
         """Return the KDE mode of y|x for each row in X.
@@ -106,10 +116,7 @@ class MpeDataset:
             idx = int(np.argmin(np.abs(self.X_raw - x).sum(axis=1)))
             samples = self.y_raw[idx]       # (50,)
             kde = gaussian_kde(samples)
-            lo, hi = samples.min(), samples.max()
-            pad = 0.1 * (hi - lo) if hi > lo else 1.0
-            grid = np.linspace(lo - pad, hi + pad, 500)
-            modes[i] = grid[np.argmax(kde(grid))]
+            modes[i] = self.y_grid[np.argmax(kde(self.y_grid))]
         return modes
 
     def gt_dens(self, X: np.ndarray, y_grid: np.ndarray) -> np.ndarray:
