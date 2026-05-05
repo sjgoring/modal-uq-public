@@ -16,6 +16,7 @@ from ..datasets.faithful import Faithful
 # from ..datasets.synthetic import SyntheticMultiModalDataset
 from ..datasets.synthetic_conditional import SyntheticMultiModalConditionalDataset
 from ..datasets.synthetic_constant_var import SyntheticConstantVarDataset
+from ..datasets.mpe import MpeDataset
 
 from ..pgt.conditional_kde import ConditionalKDE
 
