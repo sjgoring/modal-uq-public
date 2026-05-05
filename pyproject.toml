@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "modal-uq"
+version = "0.1.0"
+description = "TODO"
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [
+    { name = "Sam Goring", email = "sam.goring@kcl.ac.uk" },
+    { name = "Tom Kuipers", email = "t.kuipers@northeastern.edu" },
+]
+dependencies = [
+    "numpy",
+    "scipy",
+    "pandas",
+    "scikit-learn",
+    "matplotlib",
+    "seaborn",
+    "scikit-mdn",
+    "conditional-kde",
+    "cgmm",
+    "joblib",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+]
+
+[project.scripts]
+modal-uq = "modal_uq.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["modal_uq*"]
