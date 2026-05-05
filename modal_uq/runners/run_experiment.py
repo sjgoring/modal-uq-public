@@ -44,16 +44,21 @@ def _split_name(cfg: dict, key: str = 'name'):
     name = cfg.pop(key)          # remove 'name' so it won't be duplicated
     return name, cfg
 
+import os, datetime
+
 def _make_run_root(base_output_dir):
     ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     os.makedirs(base_output_dir, exist_ok=True)
-    run_root = os.path.join(base_output_dir, ts)
-    suffix = 1
-    while os.path.exists(run_root):
-        run_root = os.path.join(base_output_dir, f"{ts}_{suffix}")
-        suffix += 1
-    os.makedirs(run_root, exist_ok=False)
-    return run_root
+
+    suffix = 0
+    while True:
+        name = ts if suffix == 0 else f"{ts}_{suffix}"
+        run_root = os.path.join(base_output_dir, name)
+        try:
+            os.makedirs(run_root, exist_ok=False)
+            return run_root
+        except FileExistsError:
+            suffix += 1
 
 def run_from_config(config_path: str):
     cfg = read_json(config_path)
