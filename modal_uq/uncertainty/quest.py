@@ -432,19 +432,19 @@ class QUESTUncertainty(UncertaintyBase):
 
 
 
-    def _compute_total(self, model, X):
+    def _compute_total(self, model, X, y_grid=None):
         if self.scope == 'local':
-            return self._compute_total_helper(model, X, alpha=self.alpha)
+            return self._compute_total_helper(model, X, alpha=self.alpha, y_grid=y_grid)
         else:
             # integral under curve for various alpha
             f = []
             alphas = np.linspace(0.01, 0.99, num=100)
             for alpha in alphas:
-                f.append(np.asarray(self._compute_total_helper(model, X, alpha=alpha)))
+                f.append(np.asarray(self._compute_total_helper(model, X, alpha=alpha, y_grid=y_grid)))
             f = np.stack(f, axis=0)
             return np.trapz(f, alphas, axis=0)
 
-    def _compute_total_helper(self, model, X, alpha):
+    def _compute_total_helper(self, model, X, alpha, y_grid=None):
         """Compute local total uncertainty as BMA of (alpha_volume / (1 - TV)) over predict samples.
         
         For each predict sample s:
@@ -460,7 +460,8 @@ class QUESTUncertainty(UncertaintyBase):
         self.scope = 'local'
 
         try:
-            y_grid = model.default_y_grid(X, grid_points=self.grid_points, y_pad=self.y_pad)
+            if y_grid is None:
+                y_grid = model.default_y_grid(X, grid_points=self.grid_points, y_pad=self.y_pad)
             y_grid = np.asarray(y_grid)
 
             if y_grid.ndim == 1:
@@ -548,7 +549,7 @@ class QUESTUncertainty(UncertaintyBase):
             self.alpha = alpha_old
             self.scope = scope_old
 
-    def _compute_aleatoric(self, model, X):
+    def _compute_aleatoric(self, model, X, y_grid=None):
         """Compute aleatoric uncertainty as BMA of QUEST measure over predict samples.
         
         Uses predict context with BMA decomposition:
@@ -556,7 +557,8 @@ class QUESTUncertainty(UncertaintyBase):
         - For each predict sample: computes alpha_volume
         - Averages across all predict samples
         """
-        y_grid = model.default_y_grid(X, grid_points=self.grid_points, y_pad=self.y_pad)
+        if y_grid is None:
+            y_grid = model.default_y_grid(X, grid_points=self.grid_points, y_pad=self.y_pad)
         y_grid = np.asarray(y_grid)
 
         if y_grid.ndim == 1:
@@ -690,24 +692,24 @@ class QUESTUncertainty(UncertaintyBase):
         #     alpha_volume_scores.append(alpha_volume_val)
         # return np.array(alpha_volume_scores)
 
-    def score_total(self, model, X, y_true=None):
-        return self._compute_total(model, X)
+    def score_total(self, model, X, y_true=None, y_grid=None):
+        return self._compute_total(model, X, y_grid=y_grid)
 
-    def score_aleatoric(self, model, X, y_true=None):
-        return self._compute_aleatoric(model, X)
+    def score_aleatoric(self, model, X, y_true=None, y_grid=None):
+        return self._compute_aleatoric(model, X, y_grid=y_grid)
 
-    def score_epistemic(self, model, X, y_true=None):
+    def score_epistemic(self, model, X, y_true=None, y_grid=None):
         return self._compute_epistemic(model, X)
 
-    def score(self, model, X, y_true=None):
+    def score(self, model, X, y_true=None, y_grid=None):
         """Dispatch to total/aleatoric/epistemic score by decomposition."""
         # Validate inferential choices upfront
         self._validate_inferential_choices(model)
         
         if self.decomposition == 'total':
-            return self._compute_total(model, X)
+            return self._compute_total(model, X, y_grid=y_grid)
         if self.decomposition == 'aleatoric':
-            return self._compute_aleatoric(model, X)
+            return self._compute_aleatoric(model, X, y_grid=y_grid)
         if self.decomposition == 'epistemic':
             return self._compute_epistemic(model, X)
         raise ValueError(f"Unknown decomposition: {self.decomposition}")

@@ -1,11 +1,12 @@
 
 import numpy as np
 import pandas as pd
+import inspect
 from ..registry import build
 from ..utils import plot as plot_utils
 
 
-def compute_uncertainty_scores(measure_specs, model, X, y=None):
+def compute_uncertainty_scores(measure_specs, model, X, y=None, y_grid=None):
     import pandas as pd
     from ..registry import build
 
@@ -29,17 +30,16 @@ def compute_uncertainty_scores(measure_specs, model, X, y=None):
         measure_label = label if label else measure_name
         print("  Computing uncertainty measure: {} ({})".format(measure_label, measure_name))
 
-        # 4) Compute the score
-        # print("Test prints - correlation.py - compute_uncertainty_scores")
-        # print(X.shape, y.shape if y is not None else None)
-        # print(X[:5], y[:5] if y is not None else None)
-        # 23:10 02/03 - appears ok.
-        s = u.score(model, X, y)
+        # 5) Compute the score, passing y_grid only when the scorer supports it.
+        if y_grid is not None and 'y_grid' in inspect.signature(u.score).parameters:
+            s = u.score(model, X, y, y_grid=y_grid)
+        else:
+            s = u.score(model, X, y)
 
         # Print completion
         print("  [OK] {} complete".format(measure_label))
 
-        # 5) Name the column: label (if provided) else measure name
+        # 6) Name the column: label (if provided) else measure name
         key = label if label else spec['name']
         out[key] = s
 

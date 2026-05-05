@@ -77,8 +77,9 @@ class PredictiveVariance(UncertaintyBase):
                 f"Current settings: predict='{cfg.predict}', approximate='{cfg.approximate}'."
             )
 
-    def _compute_total(self, model, X):
-        y_grid = model.default_y_grid(X, grid_points=self.grid_points, y_pad=self.y_pad)
+    def _compute_total(self, model, X, y_grid=None):
+        if y_grid is None:
+            y_grid = model.default_y_grid(X, grid_points=self.grid_points, y_pad=self.y_pad)
         dens_pred = self._predict_density_collection(model, X, y_grid, context='predict')
         dens_approx = self._predict_density_collection(model, X, y_grid, context='approximate')
 
@@ -98,14 +99,16 @@ class PredictiveVariance(UncertaintyBase):
 
         return np.mean(np.asarray(squared_losses), axis=0)
 
-    def _compute_aleatoric(self, model, X):
-        y_grid = model.default_y_grid(X, grid_points=self.grid_points, y_pad=self.y_pad)
+    def _compute_aleatoric(self, model, X, y_grid=None):
+        if y_grid is None:
+            y_grid = model.default_y_grid(X, grid_points=self.grid_points, y_pad=self.y_pad)
         dens_pred = self._predict_density_collection(model, X, y_grid, context='predict')
         _, Var_pred_s = self._moments_from_density(dens_pred, y_grid)
         return Var_pred_s.mean(axis=0)
 
-    def _compute_epistemic(self, model, X):
-        y_grid = model.default_y_grid(X, grid_points=self.grid_points, y_pad=self.y_pad)
+    def _compute_epistemic(self, model, X, y_grid=None):
+        if y_grid is None:
+            y_grid = model.default_y_grid(X, grid_points=self.grid_points, y_pad=self.y_pad)
         dens_pred = self._predict_density_collection(model, X, y_grid, context='predict')
         dens_ref = self._posterior_predictive_density(
             self._predict_density_collection(model, X, y_grid, context='approximate')
@@ -118,22 +121,22 @@ class PredictiveVariance(UncertaintyBase):
 
         return np.mean((Ey_pred - Ey_ref[None, :]) ** 2, axis=0)
         
-    def score_total(self, model, X, y_true=None):
-        return self._compute_total(model, X)
+    def score_total(self, model, X, y_true=None, y_grid=None):
+        return self._compute_total(model, X, y_grid=y_grid)
 
-    def score_aleatoric(self, model, X, y_true=None):
-        return self._compute_aleatoric(model, X)
+    def score_aleatoric(self, model, X, y_true=None, y_grid=None):
+        return self._compute_aleatoric(model, X, y_grid=y_grid)
 
-    def score_epistemic(self, model, X, y_true=None):
-        return self._compute_epistemic(model, X)
+    def score_epistemic(self, model, X, y_true=None, y_grid=None):
+        return self._compute_epistemic(model, X, y_grid=y_grid)
 
-    def score(self, model, X, y_true=None):
+    def score(self, model, X, y_true=None, y_grid=None):
         self._validate_inferential_choices(model)
         """Dispatch to total/aleatoric/epistemic score by decomposition."""
         if self.decomposition == 'total':
-            return self.score_total(model, X, y_true=y_true)
+            return self.score_total(model, X, y_true=y_true, y_grid=y_grid)
         if self.decomposition == 'aleatoric':
-            return self.score_aleatoric(model, X, y_true=y_true)
+            return self.score_aleatoric(model, X, y_true=y_true, y_grid=y_grid)
         if self.decomposition == 'epistemic':
-            return self.score_epistemic(model, X, y_true=y_true)
+            return self.score_epistemic(model, X, y_true=y_true, y_grid=y_grid)
         raise ValueError(f"Unknown decomposition: {self.decomposition}")

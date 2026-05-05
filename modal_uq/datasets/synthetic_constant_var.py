@@ -10,6 +10,8 @@ import numpy as np
 import scipy.integrate as integrate
 import pandas as pd
 from ..registry import register
+from sklearn.model_selection import train_test_split
+from ..utils.seed import resolve_seed
 
 @register('dataset','synthetic_constant_var')
 class SyntheticConstantVarDataset:
@@ -21,6 +23,7 @@ class SyntheticConstantVarDataset:
         y_min: float = -10.0,
         y_max: float = 10.0,
         y_grid_size: int = 1000,
+        y_pad: float = 1.0,
         pi_1: float = 0.6,
         seed: Optional[int] = 42,
         split_seed: Optional[int] = None,
@@ -32,12 +35,17 @@ class SyntheticConstantVarDataset:
         self.y_min = y_min
         self.y_max = y_max
         self.y_grid_size = y_grid_size
+        self.y_pad = y_pad
         self.pi_1 = pi_1
         self.pi_2 = 1.0 - pi_1
         self.seed = seed
         self.x_sampler = x_sampler
         self.rng = np.random.default_rng(seed)
         self.needs_pseudo_ground_truth = False
+        
+        # Initialize canonical y_grid and data splits for active_learning compatibility
+        self.y_grid = self._make_y_grid()
+        self._setup_train_test_split(split_seed)
 
     def sample_x(self) -> np.ndarray:
         if self.x_sampler == 'grid':
@@ -48,6 +56,32 @@ class SyntheticConstantVarDataset:
             return xs.reshape(-1, 1)
         else:
             raise ValueError('Unknown x_sampler')
+
+    def _setup_train_test_split(self, split_seed: Optional[int] = None):
+        """Initialize train/test/val split from generated data for active_learning compatibility.
+        
+        Generates the full dataset and splits it into X_train, y_train, X_test, y_test
+        (and X_val, y_val for DatasetSpec compatibility).
+        """
+        split_seed = resolve_seed(split_seed)
+        # Generate full dataset with canonical y_grid
+        X, y, _, _, _, _ = self.get_data()
+        
+        # Split: 60% train, 20% val, 20% test
+        X_temp, X_test, y_temp, y_test = train_test_split(
+            X, y, test_size=0.2, random_state=split_seed
+        )
+        X_train, X_val, y_train, y_val = train_test_split(
+            X_temp, y_temp, test_size=0.25, random_state=split_seed  # 0.25 * 0.8 = 0.2
+        )
+        
+        # Store splits as attributes for active_learning and other experiments
+        self.X_train = X_train
+        self.y_train = y_train
+        self.X_val = X_val
+        self.y_val = y_val
+        self.X_test = X_test
+        self.y_test = y_test
 
     def get_feature_grid(self, X: np.ndarray, x_values: Optional[Tuple] = None):
         """Return feature grid for slider/plot helpers.
@@ -113,13 +147,18 @@ class SyntheticConstantVarDataset:
         pi2 = np.ones_like(xs1) * self.pi_2
         return pi1, pi2, mu_1, mu_2, sigma_1, sigma_2
 
-    def get_data(self) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    def _make_y_grid(self) -> np.ndarray:
+        y_span = self.y_max - self.y_min
+        pad = self.y_pad * (y_span + 1e-6)
+        return np.linspace(self.y_min - pad, self.y_max + pad, self.y_grid_size)
+
+    def get_data(self) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """Generate dataset using same logic as the original test script.
 
-        Returns X, y, global_mode (array), mode_ids, and y_densities (list of densities on y_grid)
+        Returns X, y, global_mode (array), mode_ids, y_densities (list of densities on y_grid), and y_grid.
         """
         X = self.sample_x() # shape (n_samples, 1)
-        y_grid = np.linspace(self.y_min, self.y_max, self.y_grid_size) # shape (y_grid_size,)
+        y_grid = self._make_y_grid() # shape (y_grid_size,)
 
         pi1, pi2, mu_1, mu_2, sigma_1, sigma_2 = self._mixture_params(X)
 
@@ -148,7 +187,7 @@ class SyntheticConstantVarDataset:
         y = np.array(y_samples).reshape(-1,)
         global_mode = np.array([mu_1.mean(), mu_2.mean()])
 
-        return X, y, global_mode, mode_ids, np.vstack(y_densities)
+        return X, y, global_mode, mode_ids, np.vstack(y_densities), y_grid
 
     def to_dataframe(self, X: np.ndarray, y: np.ndarray) -> pd.DataFrame:
         df = pd.DataFrame(X, columns=[f'x{i+1}' for i in range(X.shape[1])])

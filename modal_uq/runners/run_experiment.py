@@ -25,9 +25,15 @@ from ..models.condGMM import CondGMM
 # from ..models.bnn_vi import BayesianNNVI
 # from ..models.gp import GaussianProcessModel
 
+from ..acquisition.variance import VarianceAcq
+from ..acquisition.random import RandomAcq
+from ..acquisition.quest import QUESTAcq
+from ..acquisition.differential_entropy import DifferentialEntropyAcq
+
 from ..uncertainty.variance import PredictiveVariance
 from ..uncertainty.differential_entropy import DifferentialEntropy
 from ..uncertainty.quest import QUESTUncertainty
+from ..uncertainty.random import RandomUncertainty
 
 register('experiment','selective')(SelectivePrediction)
 register('experiment','ood')(OODExperiment)

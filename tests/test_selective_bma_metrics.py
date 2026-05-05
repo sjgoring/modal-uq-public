@@ -15,19 +15,19 @@ def _kwargs(true_dens, est_dens, y_grid, reference_dist):
 
 def test_risk_coverage_supports_bma_density_stack():
     y_grid = np.array([0.0, 1.0, 2.0])
-    y_true = np.array([0.0, 2.0])
+    y_true = np.array([1.0, 1.0])
     y_pred = np.array([1.0, 1.0])
     uncertainty = np.array([0.8, 0.2])
 
     true_dens = np.array([
-        [0.2, 0.5, 0.3],
-        [0.1, 0.6, 0.3],
+        [0.2, 0.6, 0.2],
+        [0.1, 0.7, 0.2],
     ])
     est_dens = np.stack([
         true_dens,
         np.array([
             [0.3, 0.4, 0.3],
-            [0.2, 0.3, 0.5],
+            [0.2, 0.6, 0.2],
         ]),
     ], axis=0)
 

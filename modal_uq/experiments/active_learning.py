@@ -10,6 +10,15 @@ from ..utils.seed import resolve_seed
 from ..analysis import plotting
 
 class ActiveLearning(ExperimentBase):
+    def __init__(self, ds, pgt, model, metrics, cfg, n_jobs=None):
+        """Initialize active_learning experiment with canonical y_grid caching.
+        
+        Caches the dataset-provided y_grid if available (for synthetic datasets with canonical grid).
+        """
+        super().__init__(ds, pgt, model, metrics, cfg, n_jobs)
+        # Cache canonical y_grid from dataset if available (for uncertainty scoring consistency)
+        self.y_grid = getattr(ds, 'y_grid', None)
+    
     def run(self):
         logger = get_logger(__name__)
         al_cfg = self.cfg.get('experiment', {}).get('al', {"init_size": 20, "batch": 5, "rounds": 10, "acquisition": "variance"})
@@ -23,6 +32,9 @@ class ActiveLearning(ExperimentBase):
         # reproducible RNG from experiment seed
         seed = resolve_seed(self.cfg.get('experiment', {}).get('seed'))
         rng = np.random.default_rng(seed)
+
+        if not hasattr(self.ds, 'X_train') or not hasattr(self.ds, 'y_train'):
+            self.ds._setup_test_train_split()  # ensure dataset has train/test split for AL loop
 
         X_pool, y_pool = self.ds.X_train.copy(), self.ds.y_train.copy()
         n_pool = len(X_pool)
@@ -102,7 +114,8 @@ class ActiveLearning(ExperimentBase):
                 unc_cfg = self.cfg.get('uncertainty')
                 if unc_cfg:
                     try:
-                        df_scores = compute_uncertainty_scores(unc_cfg['measures'], self.model, X_eval, y_eval)
+                        y_grid_arg = self.y_grid if hasattr(self, 'y_grid') and self.y_grid is not None else None
+                        df_scores = compute_uncertainty_scores(unc_cfg['measures'], self.model, X_eval, y_eval, y_grid=y_grid_arg)
                         errors = np.abs(preds - y_eval) if preds is not None else np.zeros(len(X_eval))
                         df_by_round.append((df_scores, errors))
                     except Exception as e:
@@ -126,7 +139,8 @@ class ActiveLearning(ExperimentBase):
                 logger.warning("Failed to persist AL arrays to run_root")
 
         if unc_cfg and len(U_idx) > 0:
-            df_scores = compute_uncertainty_scores(unc_cfg['measures'], self.model, X_pool[U_idx], y_pool[U_idx])
+            y_grid_arg = self.y_grid if hasattr(self, 'y_grid') and self.y_grid is not None else None
+            df_scores = compute_uncertainty_scores(unc_cfg['measures'], self.model, X_pool[U_idx], y_pool[U_idx], y_grid=y_grid_arg)
             corr_cfg = self.cfg.get('correlation', {})
             if corr_cfg.get('enabled', False):
                 corrs, _ = correlation_suite(df_scores, corr_cfg.get('method', ['pearson','spearman']))
