@@ -37,6 +37,7 @@ class MpeDataset:
         self.y_grid_size = y_grid_size
         self.y_min, self.y_max = None, None
         self.y_pad = y_pad
+        self.y_grid = None
 
         # Populate X_raw / y_raw and train/val/test splits
         self.get_data()

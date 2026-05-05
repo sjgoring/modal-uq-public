@@ -60,7 +60,8 @@ class SelectivePrediction(ExperimentBase):
             print("[PHASE: Model Training] Starting...")
             self.model.fit(self.X_train, self.y_train)
             print("[PHASE: Model Training] Complete [OK]")
-            y_grid = self.model.default_y_grid(self.X_test)
+            # y_grid = self.model.default_y_grid(self.X_test)
+            y_grid = self.ds.y_grid
             self.y_grid = y_grid  # Cache y_grid to avoid recomputation
             y_mode_pred = self.model.predict_mode(self.X_test, y_grid)
 
