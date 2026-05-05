@@ -19,6 +19,7 @@ class Ensemble(ModelBase):
         self._y_min = None; self._y_max = None
         self._member_losses = None  # For selection by criterion
         self.n_jobs = n_jobs  # Number of parallel jobs for compute-heavy operations
+        self.cfg = None
 
         if self.base_model == 'condgmm':
             default_cfg = InferentialChoiceConfig(
@@ -45,6 +46,7 @@ class Ensemble(ModelBase):
                     "predict='bma', approximate='posterior_predictive', "
                     "point_estimate_criterion='mle'."
                 )
+            self.cfg = cfg
 
     def fit(self, X, y, X_val=None, y_val=None):
         print("  Fitting ensemble with {} members...".format(self.n_members))
@@ -90,7 +92,8 @@ class Ensemble(ModelBase):
         self._y_min = float(y.min()); self._y_max = float(y.max())
         
         # Compute member losses for criterion-based selection
-        self._compute_member_losses(X, y)
+        print (" Skipping member loss computation")
+        # self._compute_member_losses(X, y)
 
     def _compute_member_losses(self, X, y, y_grid=None):
         """Compute losses for each member for criterion-based selection."""
@@ -134,8 +137,8 @@ class Ensemble(ModelBase):
         idx : int
             Index of selected member
         """
-        if self._member_losses is None:
-            raise RuntimeError("Member losses not computed. Call fit() first.")
+        if self._member_losses is None and (self.cfg['predict'] == "point_esimate" or self.cfg['approximate'] == "point_esimate"):
+            raise RuntimeError("Member losses not computed. but required for point-estimate inferential choice. Call fit() first.")
         
         if criterion == 'mle':
             return np.argmin(self._member_losses)
