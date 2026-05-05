@@ -111,3 +111,6 @@ logs/
 # OS
 .DS_Store
 Thumbs.db
+
+# HPC
+slurm/
