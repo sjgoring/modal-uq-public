@@ -47,7 +47,7 @@ class SelectivePrediction(ExperimentBase):
                 self.X_train = np.repeat(self.ds.X_train, n_traj, axis=0)
                 self.y_train = self.ds.y_train.flatten()
                 self.X_test = self.ds.X_test
-                self.y_test = self.ds.gt(self.ds.X_test)
+                self.y_test = self.ds.gt(self.ds.X_test, self.ds.y_test)
             else:
                 # For experiment: Selective_Synthetic only. Todo: General re-write.
                 X, y, _, _ = self.ds.get_data(pi_fn=self.ds.test_pi_fn, mu_fn=self.ds.test_mu_fn, sigma_fn=self.ds.test_sigma_fn, noise_fn=self.ds.test_no_fn)
@@ -65,12 +65,14 @@ class SelectivePrediction(ExperimentBase):
             self.y_grid = y_grid  # Cache y_grid to avoid recomputation
             y_mode_pred = self.model.predict_mode(self.X_test, y_grid)
 
-            true_dens = self.ds.gt_dens(self.X_test, y_grid)
-            if type(self.ds) is SyntheticConstantVarDataset:
+            # Make sure we run gt_dens on raw y
+            true_dens = self.ds.gt_dens(self.ds.X_test, self.ds.y_test)
+            if type(self.ds) in (SyntheticConstantVarDataset, MpeDataset):
                 y_mode_true = y_grid[true_dens.argmax(axis=1)]
-            elif type(self.ds) is MpeDataset:
-                y_mode_true = self.ds.gt(self.X_test)
+            # elif type(self.ds) is MpeDataset:
+            #     y_mode_true = self.ds.gt(self.ds.X_test, self.ds.y_test)
             else:
+                # Legacy. Function signatures have since changed. TODO update if important
                 y_mode_true = self.ds.gt(self.X_test, self.ds.test_mu_fn, self.ds.test_pi_fn, self.ds.test_sigma_fn)
 
 

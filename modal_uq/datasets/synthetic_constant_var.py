@@ -422,7 +422,7 @@ class SyntheticConstantVarDataset:
         y_mode_true = np.array([mu_vals[i, mode_idx[i]] for i in range(n)])
         return y_mode_true
     
-    def gt_dens(self, X, y_grid):
+    def gt_dens(self, X, _):
         """Return ground-truth conditional density on y_grid for each row in X."""
         n = X.shape[0]
         pi1, pi2, mu_1, mu_2, sigma_1, sigma_2 = self._mixture_params(X)
@@ -430,9 +430,9 @@ class SyntheticConstantVarDataset:
         # y_grid = np.linspace(self.y_min, self.y_max, self.y_grid_size)
         y_densities = []
         for i in range(n):
-            dens1 = (1.0 / (np.sqrt(2 * np.pi) * sigma_1[i])) * np.exp(-0.5 * ((y_grid - mu_1[i]) / sigma_1[i]) ** 2)
-            dens2 = (1.0 / (np.sqrt(2 * np.pi) * sigma_2[i])) * np.exp(-0.5 * ((y_grid - mu_2[i]) / sigma_2[i]) ** 2)
+            dens1 = (1.0 / (np.sqrt(2 * np.pi) * sigma_1[i])) * np.exp(-0.5 * ((self.y_grid - mu_1[i]) / sigma_1[i]) ** 2)
+            dens2 = (1.0 / (np.sqrt(2 * np.pi) * sigma_2[i])) * np.exp(-0.5 * ((self.y_grid - mu_2[i]) / sigma_2[i]) ** 2)
             y_dens_raw = dens1 * pi1[i] + dens2 * pi2[i]
-            y_dens = y_dens_raw / integrate.trapezoid(y_dens_raw, y_grid)
+            y_dens = y_dens_raw / integrate.trapezoid(y_dens_raw, self.y_grid)
             y_densities.append(y_dens)
         return np.vstack(y_densities)

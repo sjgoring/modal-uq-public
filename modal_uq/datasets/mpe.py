@@ -38,6 +38,11 @@ class MpeDataset:
         self.y_min, self.y_max = None, None
         self.y_pad = y_pad
         self.y_grid = None
+        self.X_raw, self.y_raw = None, None
+        self.X_train, self.y_train = None, None
+        self.X_val, self.y_val = None, None
+        self.X_test, self.y_test = None, None
+        
 
         # Populate X_raw / y_raw and train/val/test splits
         self.get_data()
@@ -105,7 +110,7 @@ class MpeDataset:
 
         return X, y, global_mode, mode_ids, np.vstack(y_densities), self.y_grid
 
-    def gt(self, X: np.ndarray) -> np.ndarray:
+    def gt(self, X: np.ndarray, y: np.ndarray) -> np.ndarray:
         """Return the KDE mode of y|x for each row in X.
 
         For each query row, the nearest stored row (by L1 distance) is located,
@@ -113,22 +118,21 @@ class MpeDataset:
         KDE on a fine grid is returned as the ground-truth conditional mode.
         """
         modes = np.empty(X.shape[0])
-        for i, x in enumerate(X):
-            idx = int(np.argmin(np.abs(self.X_raw - x).sum(axis=1)))
-            samples = self.y_raw[idx]       # (50,)
+        for idx, _ in enumerate(X):
+            samples = y[idx]       # (50,)
             kde = gaussian_kde(samples)
-            modes[i] = self.y_grid[np.argmax(kde(self.y_grid))]
+            modes[idx] = self.y_grid[np.argmax(kde(self.y_grid))]
         return modes
+        
 
-    def gt_dens(self, X: np.ndarray, y_grid: np.ndarray) -> np.ndarray:
+    def gt_dens(self, X: np.ndarray, y: np.ndarray) -> np.ndarray:
         """Return the KDE density on y_grid for each row in X."""
         y_densities = []
-        for x in X:
-            idx = int(np.argmin(np.abs(self.X_raw - x).sum(axis=1)))
-            samples = self.y_raw[idx]
+        for idx, _ in enumerate(X):
+            samples = y[idx]
             kde = gaussian_kde(samples)
-            dens = kde(y_grid)
-            dens = dens / integrate.trapezoid(dens, y_grid)
+            dens = kde(self.y_grid)
+            dens = dens / integrate.trapezoid(dens, self.y_grid)
             y_densities.append(dens)
         return np.vstack(y_densities)
 
