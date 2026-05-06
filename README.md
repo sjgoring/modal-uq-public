@@ -6,10 +6,6 @@ Selective Prediction, OOD, and Active Learning.
 
 ## Quick start
 
-## Ensure dependencies
-Note if using BNNs Python<3.8 is required
-3.7 ensures Python in the venv is v3.7.9 (long story as to why v3.7.9 is v3.7 on my machine)
-
 ## SG reminder, venv lives in temp to avoid file length issues.
 py -3.7 -m venv .venv
 ._venv\Scripts\activate
