@@ -66,7 +66,11 @@ class SelectivePrediction(ExperimentBase):
             y_mode_pred = self.model.predict_mode(self.X_test, y_grid)
 
             # Make sure we run gt_dens on raw y
-            true_dens = self.ds.gt_dens(self.ds.X_test, self.ds.y_test)
+            # Only time sefl.ds.X_test called in SP Synth-Bimodal routing.
+            # true_dens = self.ds.gt_dens(self.ds.X_test, self.ds.y_test)
+            # Change to self.X_test, self.y_test for SP Synth-Bimodal routing, to match the same data we pass to predict_density. Todo: Re-write to be more efficient and less hacky.
+            true_dens = self.ds.gt_dens(self.X_test, self.y_test)
+
             if type(self.ds) in (SyntheticConstantVarDataset, MpeDataset):
                 y_mode_true = y_grid[true_dens.argmax(axis=1)]
             # elif type(self.ds) is MpeDataset:

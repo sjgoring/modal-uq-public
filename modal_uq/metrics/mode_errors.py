@@ -31,8 +31,8 @@ def _collapse_est_dens_for_lr(est_dens):
 
 
 def _score_likelihood_ratio_single(y_true, y_mode_pred, true_dens, est_dens, y_grid, reference_dist):
-    # true_dens = _normalize_density(true_dens, y_grid)
-    # est_dens = _normalize_density(est_dens, y_grid)
+    true_dens = _normalize_density(true_dens, y_grid)
+    est_dens = _normalize_density(est_dens, y_grid)
 
     #check, are y_true and y_mode_pred actually on the grid? If not, we are doing a nearest neighbor lookup, which is fine, but we should be aware of it. If they are not on the grid, print a warning.
     if not np.all(np.isin(y_true, y_grid)):

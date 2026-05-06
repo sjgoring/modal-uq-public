@@ -14,7 +14,8 @@
   "dataset": {
     "name": "synthetic_constant_var",
     "params":{
-        "n_samples" : 1000
+        "n_samples" : 2000,
+        "seed" : 42
       }
     } 
   ,
