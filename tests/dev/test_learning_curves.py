@@ -12,6 +12,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '.
 
 from modal_uq.datasets.synthetic_constant_var import SyntheticConstantVarDataset
 from modal_uq.datasets.moons_synthetic import MoonsSyntheticDataset
+from modal_uq.datasets.mpe import MpeDataset
 from modal_uq.models.condGMM import CondGMM
 from modal_uq.models.mdn import MixtureDensityModel
 from modal_uq.models.ensemble import Ensemble
@@ -40,6 +41,9 @@ def make_small_dataset(seed, n_samples=200, test_size=0.3, source="MOONS"):
         )
         X, y, _, _, _ = ds.get_data(
         )
+    elif source == "MPE":
+        ds = MpeDataset()
+        return ds.X_train, ds.X_test, ds.y_train, ds.y_test
     else:
         raise ValueError(f"Unknown dataset: {source}")
 
@@ -168,7 +172,7 @@ def test_learning_curves(capsys):
     N_SAMPLES = 10000 # Number of training samples, not total number of samples (i.e. n_train = n_total - n_test)
     MIN_TRAIN = 10
     METRIC = "nll"
-    DATA = "SYNTH_MULTI_MODAL"
+    DATA = "MPE"
 
     # Faster dev defaults
     # N_REPS = 2
@@ -198,8 +202,8 @@ def test_learning_curves(capsys):
     # models = [(MixtureDensityModel, mdn_kwargs, "MixtureDensityModel")]
 
     # Parallel settings
-    n_jobs = max(1, (os.cpu_count()) - 1)
-    # n_jobs = 1 # for testing
+    # n_jobs = max(1, (os.cpu_count()) - 1)
+    n_jobs = 1 # for testing
     
     # Prepare one dataset to determine maximum available training size
     X_train_all, X_test, y_train_all, y_test = make_small_dataset(seed=0, n_samples=N_SAMPLES, source=DATA)

@@ -11,6 +11,7 @@ from ..utils.seed import resolve_seed
 import matplotlib.pyplot as plt
 from sklearn.model_selection import train_test_split
 from ..datasets.synthetic_constant_var import SyntheticConstantVarDataset
+from ..datasets.mpe import MpeDataset
 import datetime
 
 class SelectivePrediction(ExperimentBase):
@@ -41,6 +42,12 @@ class SelectivePrediction(ExperimentBase):
                 _, self.X_test, _, self.y_test = train_test_split(self.X_test, self.y_test, test_size=0.2, random_state=split_seed)
                 y_grid = y_grid_test
 
+            elif type(self.ds) is MpeDataset:
+                n_traj = self.ds.y_train.shape[1]
+                self.X_train = np.repeat(self.ds.X_train, n_traj, axis=0)
+                self.y_train = self.ds.y_train.flatten()
+                self.X_test = self.ds.X_test
+                self.y_test = self.ds.gt(self.ds.X_test, self.ds.y_test)
             else:
                 # For experiment: Selective_Synthetic only. Todo: General re-write.
                 X, y, _, _ = self.ds.get_data(pi_fn=self.ds.test_pi_fn, mu_fn=self.ds.test_mu_fn, sigma_fn=self.ds.test_sigma_fn, noise_fn=self.ds.test_no_fn)
@@ -53,14 +60,28 @@ class SelectivePrediction(ExperimentBase):
             print("[PHASE: Model Training] Starting...")
             self.model.fit(self.X_train, self.y_train)
             print("[PHASE: Model Training] Complete [OK]")
-            y_grid = self.model.default_y_grid(self.X_test)
+            # y_grid = self.model.default_y_grid(self.X_test)
+            y_grid = self.ds.y_grid
             self.y_grid = y_grid  # Cache y_grid to avoid recomputation
             y_mode_pred = self.model.predict_mode(self.X_test, y_grid)
 
-            true_dens = self.ds.gt_dens(self.X_test, y_grid)
+            # Make sure we run gt_dens on raw y
+            # Only time sefl.ds.X_test called in SP Synth-Bimodal routing.
+            # true_dens = self.ds.gt_dens(self.ds.X_test, self.ds.y_test)
+            # Change to self.X_test, self.y_test for SP Synth-Bimodal routing, to match the same data we pass to predict_density. Todo: Re-write to be more efficient and less hacky.
             if type(self.ds) is SyntheticConstantVarDataset:
+                true_dens = self.ds.gt_dens(self.X_test, self.y_test)
+            elif type(self.ds) is MpeDataset:
+                # Will this cause MPE results to suffer the same issue we had on Syth constant?
+                # TODO: See what happens.
+                true_dens = self.ds.gt_dens(self.ds.X_test, self.ds.y_test)
+
+            if type(self.ds) in (SyntheticConstantVarDataset, MpeDataset):
                 y_mode_true = y_grid[true_dens.argmax(axis=1)]
+            # elif type(self.ds) is MpeDataset:
+            #     y_mode_true = self.ds.gt(self.ds.X_test, self.ds.y_test)
             else:
+                # Legacy. Function signatures have since changed. TODO update if important
                 y_mode_true = self.ds.gt(self.X_test, self.ds.test_mu_fn, self.ds.test_pi_fn, self.ds.test_sigma_fn)
 
 

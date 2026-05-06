@@ -7,12 +7,12 @@
     "uncertainty": null
   },
   "experiment": {
-    "type": "active_learning",
-    "output_dir": "runs/active/synth_const_var_test",
+    "type": "selective",
+    "output_dir": "runs/selective_mpe_testing",
     "needs_psuedo_ground_truth": false
   },
   "dataset": {
-    "name": "synthetic_constant_var",
+    "name": "mpe",
     "params":{
         "n_samples" : 100
       }
@@ -29,9 +29,10 @@
     "name": "ensemble",
   "params": {
     "base_model" : "condgmm",
-          "n_members" : 6,
+          "n_members" : 3,
+          "seed": 42,
           "base_params": {
-            "n_components": 2
+            "n_components": 1
       }
   },
     "inferential_choice": {
@@ -42,6 +43,7 @@
   },
   "uncertainty": {
       "measures": [
+    {"name": "random", "params": { "label": "random" } },
     { "name": "differential_entropy", "params": { "decomposition": "total",     "label": "differential_entropy_total" } },
     { "name": "differential_entropy", "params": { "decomposition": "aleatoric",     "label": "differential_entropy_aleatoric" } },
     { "name": "differential_entropy", "params": { "decomposition": "epistemic",     "label": "differential_entropy_epistemic" } },
@@ -57,7 +59,7 @@
   ]
 },
   "correlation": {
-    "enabled": false,
+    "enabled": true,
     "method": [
       "pearson",
       "spearman"
@@ -67,7 +69,7 @@
   "metrics": {
     "primary": [
       "lr_true",
-      "lr_est"
+      "coverage_est"
     ],
     "distributional": [
       "nll",
