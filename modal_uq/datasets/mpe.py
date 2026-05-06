@@ -125,14 +125,19 @@ class MpeDataset:
         return modes
         
 
-    def gt_dens(self, X: np.ndarray, y: np.ndarray) -> np.ndarray:
-        """Return the KDE density on y_grid for each row in X."""
+    def gt_dens(self, X: np.ndarray, y: np.ndarray, y_grid: np.ndarray = None) -> np.ndarray:
+        """Return the KDE density on `y_grid` (or dataset's `self.y_grid`) for each row in X.
+
+        Accept a caller-provided `y_grid` for evaluation; if `y_grid` is None then
+        fall back to the dataset's canonical `self.y_grid`.
+        """
+        eval_grid = y_grid if y_grid is not None else self.y_grid
         y_densities = []
         for idx, _ in enumerate(X):
             samples = y[idx]
             kde = gaussian_kde(samples)
-            dens = kde(self.y_grid)
-            dens = dens / integrate.trapezoid(dens, self.y_grid)
+            dens = kde(eval_grid)
+            dens = dens / integrate.trapezoid(dens, eval_grid)
             y_densities.append(dens)
         return np.vstack(y_densities)
 

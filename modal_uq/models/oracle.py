@@ -65,8 +65,35 @@ class Oracle(ModelBase):
         strategy = self.resolve_inferential_choice(context=context)
         if strategy not in {'bma', 'posterior_predictive'}:
             raise NotImplementedError(f"Oracle does not support strategy {strategy}")
-        
-        dens = self.data_set.gt_dens(X, y)
+        # Minimal compatibility layer: some datasets (MPE) expect empirical
+        # trajectory samples as the second argument to `gt_dens`, whereas the
+        # public model API passes a canonical `y_grid` here. To avoid changing
+        # global grid plumbing, special-case MPE to supply its stored empirical
+        # samples while keeping the caller-provided `y` as the evaluation grid.
+        dens = None
+        try:
+            # import locally to avoid potential circular imports
+            from ..datasets.mpe import MpeDataset
+        except Exception:
+            MpeDataset = None
+
+        if MpeDataset is not None and isinstance(self.data_set, MpeDataset):
+            # Prefer dataset's cached per-row trajectory samples (test split if available).
+            # Avoid using `or` on NumPy arrays (ambiguous truth value). Explicitly
+            # check attributes for None instead.
+            empirical_y = None
+            if hasattr(self.data_set, 'y_test') and getattr(self.data_set, 'y_test') is not None:
+                empirical_y = self.data_set.y_test
+            elif hasattr(self.data_set, 'y_raw') and getattr(self.data_set, 'y_raw') is not None:
+                empirical_y = self.data_set.y_raw
+            # If empirical samples are available, call gt_dens with them and the
+            # caller-provided `y` as the evaluation grid.
+            if empirical_y is not None:
+                dens = self.data_set.gt_dens(X, empirical_y, y)
+
+        if dens is None:
+            # Default behaviour: pass through (for grid-native datasets)
+            dens = self.data_set.gt_dens(X, y)
 
         if strategy == 'bma':
             # Exactly repeat the density for each X, to provide expect BMA behaviour whilst maintaining Oracle knowledge.
@@ -94,13 +121,31 @@ class Oracle(ModelBase):
     
     def sample_output(self, X, n_samples, rng):
         # In the Oracle case, sampling from the predictive distribution is just sampling from the GT density.   
-        #y_grid = self.data_set.y_grid
-        dens = self.predict_density(X)
-        y_grid = self.data_set.y_grid
-        samples = []
-        for i in range(len(X)):
-            samples.append(rng.choice(y_grid, size=n_samples, p=dens[i]))
-        return np.array(samples)
+        # Use the dataset's cached y_grid where available to avoid callers needing
+        # to supply it and to preserve existing grid caches.
+        y_grid = getattr(self.data_set, 'y_grid', None)
+        if y_grid is None:
+            raise ValueError("Oracle.sample_output requires the dataset to provide a y_grid")
+
+        dens = self.predict_density(X, y_grid)
+        # Collapse BMA stack if present
+        if dens.ndim == 3:
+            dens = dens.mean(axis=0)
+        N = X.shape[0]
+        # Ensure densities are normalized along the grid axis
+        try:
+            dens = dens / (dens.sum(axis=1, keepdims=True) + 1e-12)
+        except Exception:
+            pass
+
+        # Build samples shape (n_samples, N, d) where d==1 for scalar outputs
+        samples = np.zeros((n_samples, N, 1))
+        for i in range(N):
+            probs = dens[i]
+            # rng.choice expects 1D probs summing to 1
+            draws = rng.choice(y_grid, size=n_samples, p=probs)
+            samples[:, i, 0] = draws
+        return samples
     
     def output_bounds(self, X, q_low=0.001, q_high=1 - 0.001, pad_frac=0.05, n_samples=10000, rng=None):
         # Copied from ensemble, but sampling from the Oracle predictive density instead of an ensemble of members.
@@ -120,9 +165,18 @@ class Oracle(ModelBase):
         `points` shape: (M, d)
         Returns: (M,) densities for the specified input_index.
         """
-        dens = self.predict_density(X)
+        # Compute densities on the dataset's canonical grid to avoid requiring
+        # callers to pass the grid through. This preserves cached grids.
+        y_grid = getattr(self.data_set, 'y_grid', None)
+        if y_grid is None:
+            raise ValueError("density_function_for_input requires the dataset to provide a y_grid")
+
+        dens = self.predict_density(X, y_grid)
+        if dens.ndim == 3:
+            dens = dens.mean(axis=0)
+
         def density_func(points, input_index):
-            if points != self.data_set.y_grid:
+            if not np.array_equal(points, y_grid):
                 raise ValueError("density_function_for_input only supports points equal to the dataset's y_grid")
             predictive_dens = dens[input_index]  # (y_grid_size,)
             return predictive_dens

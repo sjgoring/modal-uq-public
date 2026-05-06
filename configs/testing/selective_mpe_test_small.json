@@ -29,10 +29,10 @@
     "name": "ensemble",
   "params": {
     "base_model" : "condgmm",
-          "n_members" : 6,
+          "n_members" : 3,
           "seed": 42,
           "base_params": {
-            "n_components": 2
+            "n_components": 1
       }
   },
     "inferential_choice": {

@@ -69,7 +69,12 @@ class SelectivePrediction(ExperimentBase):
             # Only time sefl.ds.X_test called in SP Synth-Bimodal routing.
             # true_dens = self.ds.gt_dens(self.ds.X_test, self.ds.y_test)
             # Change to self.X_test, self.y_test for SP Synth-Bimodal routing, to match the same data we pass to predict_density. Todo: Re-write to be more efficient and less hacky.
-            true_dens = self.ds.gt_dens(self.X_test, self.y_test)
+            if type(self.ds) is SyntheticConstantVarDataset:
+                true_dens = self.ds.gt_dens(self.X_test, self.y_test)
+            elif type(self.ds) is MpeDataset:
+                # Will this cause MPE results to suffer the same issue we had on Syth constant?
+                # TODO: See what happens.
+                true_dens = self.ds.gt_dens(self.ds.X_test, self.ds.y_test)
 
             if type(self.ds) in (SyntheticConstantVarDataset, MpeDataset):
                 y_mode_true = y_grid[true_dens.argmax(axis=1)]
