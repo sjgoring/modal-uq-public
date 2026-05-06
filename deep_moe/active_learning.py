@@ -479,6 +479,7 @@ def run_single_seed(
     K: int,
     model: str = "deep",
     dataset: str = "dgp",
+    output_dir: str = "results",
     logger: logging.Logger = None,
     # Deep ensemble hyperparameters:
     hidden_dim: int = 32,
@@ -490,6 +491,9 @@ def run_single_seed(
     # MoE hyperparameters:
     bootstrap: bool = True,
 ) -> dict:
+    if logger is None:
+        logger = setup_logger(output_dir, seed=seed, level=logging.INFO)
+
     if dataset == "mpe":
         ds = load_mpe_dataset(split_seed=seed)
         X_train_full = ds.X_train
@@ -707,14 +711,13 @@ def run_experiment(
     if n_jobs == 1:
         per_seed_results = []
         for s in seeds:
-            seed_logger = setup_logger(output_dir, seed=s, level=logging.INFO)
             t_seed = time.time()
-            res = run_single_seed(seed=s, dataset=dataset, logger=seed_logger, **common_kwargs)
+            res = run_single_seed(seed=s, dataset=dataset, output_dir=output_dir, logger=None, **common_kwargs)
             per_seed_results.append(res)
             log_print(main_logger, f"    Seed {s} took {time.time() - t_seed:.1f}s")
     else:
         per_seed_results = Parallel(n_jobs=n_jobs, verbose=10)(
-            delayed(run_single_seed)(seed=s, dataset=dataset, logger=setup_logger(output_dir, seed=s), **common_kwargs) for s in seeds
+            delayed(run_single_seed)(seed=s, dataset=dataset, output_dir=output_dir, logger=None, **common_kwargs) for s in seeds
         )
     
     elapsed = time.time() - t0
