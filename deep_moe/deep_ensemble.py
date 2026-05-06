@@ -311,6 +311,54 @@ class DeepEnsemble:
             mus=flat_mus, sigmas=flat_sigmas, weights=flat_weights,
         )
     
+    def member_distribution(
+        self, x: np.ndarray, m: int, device: str = "cpu"
+    ) -> GaussianMixture1D:
+        """Get the m-th ensemble member's K-component predictive at input x.
+        
+        Used for MLE estimator (where one selected member plays the role of
+        truth approximation hat_p_star).
+        """
+        x_batch = x[None, :]
+        mus, sigmas, weights = self.predict(x_batch, device=device)
+        # Shapes: (1, M, K) -> select member m -> (K,)
+        member_mus = mus[0, m]
+        member_sigmas = sigmas[0, m]
+        member_weights = weights[0, m]
+        # Renormalize weights to sum to 1 (they sum to 1 already, but be safe)
+        member_weights = member_weights / member_weights.sum()
+        return GaussianMixture1D(
+            mus=member_mus, sigmas=member_sigmas, weights=member_weights,
+        )
+    
+    def member_log_likelihood(
+        self, X: np.ndarray, y: np.ndarray, m: int, device: str = "cpu"
+    ) -> float:
+        """Mean log-likelihood of (X, y) under the m-th ensemble member.
+        
+        Used for MLE selection: compute this for each m on the training set
+        and pick argmax.
+        """
+        n = X.shape[0]
+        mus, sigmas, weights = self.predict(X, device=device)  # (n, M, K)
+        member_mus = mus[:, m, :]            # (n, K)
+        member_sigmas = sigmas[:, m, :]
+        member_weights = weights[:, m, :]
+        
+        # Per-sample log p(y | x) under the K-component mixture
+        # log p = logsumexp_k [log w_k - 0.5 log(2 pi sigma_k^2) - 0.5 (y-mu_k)^2/sigma_k^2]
+        diff = (y[:, None] - member_mus) / member_sigmas
+        log_normal = (
+            -0.5 * np.log(2 * np.pi)
+            - np.log(member_sigmas)
+            - 0.5 * diff ** 2
+        )  # (n, K)
+        log_weighted = np.log(np.maximum(member_weights, 1e-300)) + log_normal
+        # logsumexp over K
+        max_lw = log_weighted.max(axis=1, keepdims=True)
+        log_p = max_lw[:, 0] + np.log(np.exp(log_weighted - max_lw).sum(axis=1))
+        return float(log_p.mean())
+    
     def parameter_samples(
         self, x: np.ndarray, device: str = "cpu"
     ) -> np.ndarray:

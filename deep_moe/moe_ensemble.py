@@ -140,10 +140,43 @@ class MoEEnsemble:
     def member_distribution(self, x: np.ndarray, m: int) -> GaussianMixture1D:
         """Get just the m-th ensemble member's predictive at x.
         
-        Used for C2 estimator (iterating over members as predicting models).
+        Used for the MLE estimator (where one selected member plays truth approximation).
         """
         means, sigmas, weights = self._conditional_at(x)[m]
         return GaussianMixture1D(mus=means, sigmas=sigmas, weights=weights)
+    
+    def member_log_likelihood(self, X: np.ndarray, y: np.ndarray, m: int) -> float:
+        """Mean log-likelihood of (X, y) under the m-th ensemble member.
+        
+        Used for MLE selection.
+        """
+        from scipy.special import logsumexp
+        x_aug = augment_features(X)
+        gmm = self.models[m].condition(x_aug)
+        # gmm.score_samples gives log p(y | X) for each row; need to handle 1D output
+        # cgmm's GaussianMixture stores per-sample conditional GMM; iterate.
+        # Actually .condition(X_aug) returns a single sklearn.GaussianMixture
+        # whose means and covariances depend on X. Let's evaluate log p_m(y | x_i)
+        # for each i separately by using cgmm's log_prob if it exists, else manual.
+        n = X.shape[0]
+        means_per_x, covs_per_x, weights_per_x = [], [], []
+        for i in range(n):
+            g = self.models[m].condition(x_aug[i:i+1])
+            means_per_x.append(g.means_.ravel())
+            covs_per_x.append(g.covariances_.ravel())
+            weights_per_x.append(g.weights_)
+        means_per_x = np.array(means_per_x)        # (n, K)
+        covs_per_x = np.array(covs_per_x)
+        weights_per_x = np.array(weights_per_x)
+        sigmas_per_x = np.sqrt(covs_per_x)
+        diff = (y[:, None] - means_per_x) / sigmas_per_x
+        log_normal = (
+            -0.5 * np.log(2 * np.pi)
+            - np.log(sigmas_per_x)
+            - 0.5 * diff ** 2
+        )
+        log_weighted = np.log(np.maximum(weights_per_x, 1e-300)) + log_normal
+        return float(logsumexp(log_weighted, axis=1).mean())
     
     def parameter_samples(self, x: np.ndarray) -> np.ndarray:
         """For QUEST oracle EU: return M × 2 array of [mu_m, log_sigma_m].

@@ -1,15 +1,33 @@
 """
 Uncertainty measures for regression.
 
-Implements:
-- Variance-based: AU, EU, TU (decomposed via law of total variance).
-- Entropy-based: differential entropy, expected within-component entropy,
-  Jensen gap (mutual information).
-- QUEST: V_alpha, integrated volume, truth-relative TU via TVD penalty.
+Each measure now follows the B1 estimator design from Schweighofer et al.:
+the predicting model is bar_p (the ensemble's posterior predictive), and the
+truth approximation hat_p_star is either the true conditional density (oracle)
+or a single ensemble member's predictive (MLE). Both bar_p and hat_p_star
+appear in the AU/EU/TU formulas:
 
-Each measure operates on:
-- A predictive distribution (Gaussian mixture from ensemble) for plug-in EU/TU.
-- The true conditional density p_theta_star for AU and TU oracle.
+- Variance:
+    AU = Var_{Y ~ hat_p_star}(Y)               — irreducible noise variance
+    EU = (mu_{hat_p_star} - mu_{bar_p})^2      — squared mean miscalibration
+    TU = AU + EU                               — expected MSE of bar_p's mean
+                                                  predictor under hat_p_star.
+- Entropy:
+    AU = h(hat_p_star)                         — differential entropy of truth
+    EU = KL(hat_p_star || bar_p)               — KL from truth to predictive
+    TU = AU + EU                               — cross-entropy of bar_p under
+                                                  hat_p_star.
+- QUEST:
+    AU = V_alpha(hat_p_star)                   — HDR volume under truth
+    EU = V_alpha(q)                            — HDR volume in parameter space
+    TU = V_alpha(hat_p_star) / (1 - TVD(hat_p_star_alpha, bar_p_alpha))
+
+Helper: parameter-space EU uses 2D KDE on (mu_m, log_sigma_m) summaries of each
+ensemble member's mixture, computed via DeepEnsemble.parameter_samples().
+
+The old C-row variance/entropy functions (variance_au(predictive), etc., which
+depended only on bar_p) are commented out below — they were the (C, 2) cell of
+the Schweighofer table and don't fit the B1 framework.
 """
 
 import numpy as np
@@ -18,55 +36,153 @@ from scipy import integrate
 from predictive import GaussianMixture1D, GridDensity1D, compute_hdr
 
 
-# ==================== Variance-based measures ====================
+# ==================== Helpers for grid-based density operations ====================
 
-def variance_au(predictive: GaussianMixture1D) -> float:
-    """Aleatoric uncertainty as expected within-component variance."""
-    return float(predictive.weights @ predictive.sigmas ** 2)
-
-
-def variance_eu(predictive: GaussianMixture1D) -> float:
-    """Epistemic uncertainty as variance of component means."""
-    mean_of_means = predictive.mean()
-    return float(predictive.weights @ (predictive.mus - mean_of_means) ** 2)
-
-
-def variance_tu(predictive: GaussianMixture1D) -> float:
-    """Total variance via law of total variance: AU + EU."""
-    return variance_au(predictive) + variance_eu(predictive)
-
-
-# ==================== Entropy-based measures ====================
-
-def gaussian_entropy(sigma: float) -> float:
-    """Differential entropy of N(mu, sigma^2) (independent of mu)."""
-    return 0.5 * np.log(2 * np.pi * np.e * sigma ** 2)
-
-
-def entropy_au(predictive: GaussianMixture1D) -> float:
-    """Aleatoric uncertainty as expected within-component differential entropy."""
-    component_entropies = np.array([gaussian_entropy(s) for s in predictive.sigmas])
-    return float(predictive.weights @ component_entropies)
-
-
-def entropy_tu(predictive: GaussianMixture1D, n_grid: int = 5000) -> float:
-    """Total uncertainty as differential entropy of the predictive mixture.
+def _grid_density(p, n_grid: int = 5000):
+    """Get (y_grid, density) for either a GridDensity1D or GaussianMixture1D.
     
-    Computed numerically since mixture differential entropy has no closed form.
+    For GaussianMixture1D, computes density on a self-built grid; for
+    GridDensity1D, just returns the existing grid and densities.
     """
-    y_grid = predictive.grid(n_grid=n_grid)
-    densities = predictive.density(y_grid)
-    # Avoid log(0) via masking
-    mask = densities > 1e-300
+    if isinstance(p, GridDensity1D):
+        return p.y_grid, p.density_values
+    # GaussianMixture1D
+    y_grid = p.grid(n_grid=n_grid)
+    return y_grid, p.density(y_grid)
+
+
+def _density_mean(p, n_grid: int = 5000) -> float:
+    """E_{Y ~ p}[Y] for GridDensity1D or GaussianMixture1D."""
+    if isinstance(p, GaussianMixture1D):
+        return p.mean()
+    y, d = _grid_density(p, n_grid=n_grid)
+    return float(np.trapz(y * d, y))
+
+
+def _density_variance(p, n_grid: int = 5000) -> float:
+    """Var_{Y ~ p}(Y) for GridDensity1D or GaussianMixture1D."""
+    if isinstance(p, GaussianMixture1D):
+        return p.variance()
+    y, d = _grid_density(p, n_grid=n_grid)
+    mu = float(np.trapz(y * d, y))
+    return float(np.trapz((y - mu) ** 2 * d, y))
+
+
+def _density_entropy(p, n_grid: int = 5000) -> float:
+    """Differential entropy h(p) computed numerically."""
+    y, d = _grid_density(p, n_grid=n_grid)
+    mask = d > 1e-300
     return float(-np.trapz(
-        np.where(mask, densities * np.log(np.where(mask, densities, 1)), 0),
-        y_grid
+        np.where(mask, d * np.log(np.where(mask, d, 1)), 0),
+        y
     ))
 
 
-def entropy_eu(predictive: GaussianMixture1D, n_grid: int = 5000) -> float:
-    """Epistemic uncertainty as Jensen gap: h(predictive) - E[h(p_theta)]."""
-    return entropy_tu(predictive, n_grid=n_grid) - entropy_au(predictive)
+def _kl_divergence(p, q, n_grid: int = 5000) -> float:
+    """KL(p || q) computed on a shared grid.
+    
+    Uses p's grid if it has one (GridDensity1D), else builds one from p.
+    Evaluates q at that grid via q.density(grid).
+    """
+    y_grid, p_d = _grid_density(p, n_grid=n_grid)
+    if isinstance(q, GridDensity1D):
+        q_d = np.interp(y_grid, q.y_grid, q.density_values)
+    else:
+        q_d = q.density(y_grid)
+    
+    # Where p > 0, contribution is p * log(p/q). Where p = 0, contribution is 0.
+    # Where q = 0 but p > 0, KL is infinite — clip q to a small floor.
+    p_safe = np.maximum(p_d, 1e-300)
+    q_safe = np.maximum(q_d, 1e-300)
+    integrand = np.where(p_d > 1e-300, p_d * (np.log(p_safe) - np.log(q_safe)), 0.0)
+    return float(np.trapz(integrand, y_grid))
+
+
+# ==================== Variance-based measures (B1 framework) ====================
+
+def variance_au(p_hat_star, n_grid: int = 5000) -> float:
+    """AU = Var_{Y ~ hat_p_star}(Y). Irreducible noise variance under truth."""
+    return _density_variance(p_hat_star, n_grid=n_grid)
+
+
+def variance_eu(p_hat_star, bar_p, n_grid: int = 5000) -> float:
+    """EU = (mu_{hat_p_star} - mu_{bar_p})^2. Squared mean miscalibration.
+    
+    Equals zero iff bar_p's mean matches hat_p_star's mean.
+    """
+    mu_truth = _density_mean(p_hat_star, n_grid=n_grid)
+    mu_pred = _density_mean(bar_p, n_grid=n_grid)
+    return (mu_truth - mu_pred) ** 2
+
+
+def variance_tu(p_hat_star, bar_p, n_grid: int = 5000) -> float:
+    """TU = AU + EU = E_{Y ~ hat_p_star}[(Y - mu_bar_p)^2].
+    
+    Expected squared error of using bar_p's mean as a point predictor under
+    hat_p_star.
+    """
+    return variance_au(p_hat_star, n_grid=n_grid) + variance_eu(
+        p_hat_star, bar_p, n_grid=n_grid
+    )
+
+
+# ==================== Entropy-based measures (B1 framework) ====================
+
+def entropy_au(p_hat_star, n_grid: int = 5000) -> float:
+    """AU = h(hat_p_star). Differential entropy of the truth approximation."""
+    return _density_entropy(p_hat_star, n_grid=n_grid)
+
+
+def entropy_eu(p_hat_star, bar_p, n_grid: int = 5000) -> float:
+    """EU = KL(hat_p_star || bar_p). Truth-relative model miscalibration."""
+    return _kl_divergence(p_hat_star, bar_p, n_grid=n_grid)
+
+
+def entropy_tu(p_hat_star, bar_p, n_grid: int = 5000) -> float:
+    """TU = AU + EU = h(hat_p_star) + KL(hat_p_star || bar_p) = CE(hat_p_star; bar_p).
+    
+    Cross-entropy of bar_p under hat_p_star.
+    """
+    return entropy_au(p_hat_star, n_grid=n_grid) + entropy_eu(
+        p_hat_star, bar_p, n_grid=n_grid
+    )
+
+
+# ==================== Old C-row variance/entropy (DISABLED) ====================
+# These computed AU/EU/TU based on bar_p alone (Schweighofer's (C,2) cell) and
+# are not used under the B1 framework. Preserved here in case we need them later.
+#
+# def variance_au_old(predictive: GaussianMixture1D) -> float:
+#     """C-row AU as expected within-component variance."""
+#     return float(predictive.weights @ predictive.sigmas ** 2)
+#
+# def variance_eu_old(predictive: GaussianMixture1D) -> float:
+#     """C-row EU as variance of component means."""
+#     mean_of_means = predictive.mean()
+#     return float(predictive.weights @ (predictive.mus - mean_of_means) ** 2)
+#
+# def variance_tu_old(predictive: GaussianMixture1D) -> float:
+#     """C-row TU via law of total variance."""
+#     return variance_au_old(predictive) + variance_eu_old(predictive)
+#
+# def gaussian_entropy(sigma: float) -> float:
+#     return 0.5 * np.log(2 * np.pi * np.e * sigma ** 2)
+#
+# def entropy_au_old(predictive: GaussianMixture1D) -> float:
+#     component_entropies = np.array([gaussian_entropy(s) for s in predictive.sigmas])
+#     return float(predictive.weights @ component_entropies)
+#
+# def entropy_tu_old(predictive: GaussianMixture1D, n_grid: int = 5000) -> float:
+#     y_grid = predictive.grid(n_grid=n_grid)
+#     densities = predictive.density(y_grid)
+#     mask = densities > 1e-300
+#     return float(-np.trapz(
+#         np.where(mask, densities * np.log(np.where(mask, densities, 1)), 0),
+#         y_grid
+#     ))
+#
+# def entropy_eu_old(predictive: GaussianMixture1D, n_grid: int = 5000) -> float:
+#     return entropy_tu_old(predictive, n_grid=n_grid) - entropy_au_old(predictive)
 
 
 # ==================== QUEST measures ====================
@@ -154,38 +270,38 @@ def quest_tu_local(
 
 # ----- C2 plug-in: predicting model = w, truth approx = predictive bar_p -----
 
-def quest_au_local_c2(predictive: GaussianMixture1D, alpha: float) -> float:
-    """C2 local AU: E_w[V_alpha(p_w)] = mean V_alpha across ensemble components."""
-    M = predictive.M
-    vols = np.zeros(M)
-    for m in range(M):
-        comp = _component_distribution(predictive, m)
-        v, _, _ = compute_hdr(comp, alpha=alpha)
-        vols[m] = v
-    return float(predictive.weights @ vols)
+# def quest_au_local_c2(predictive: GaussianMixture1D, alpha: float) -> float:
+#     """C2 local AU: E_w[V_alpha(p_w)] = mean V_alpha across ensemble components."""
+#     M = predictive.M
+#     vols = np.zeros(M)
+#     for m in range(M):
+#         comp = _component_distribution(predictive, m)
+#         v, _, _ = compute_hdr(comp, alpha=alpha)
+#         vols[m] = v
+#     return float(predictive.weights @ vols)
 
 
-def quest_tu_local_c2(
-    predictive: GaussianMixture1D,
-    alpha: float,
-    n_grid: int = 5000,
-) -> float:
-    """C2 local TU: E_w[V_alpha(p_w) / (1 - TVD(p_w_alpha, predictive_alpha))].
+# def quest_tu_local_c2(
+#     predictive: GaussianMixture1D,
+#     alpha: float,
+#     n_grid: int = 5000,
+# ) -> float:
+#     """C2 local TU: E_w[V_alpha(p_w) / (1 - TVD(p_w_alpha, predictive_alpha))].
     
-    Predicting model = each ensemble component w; truth approx = bar_p (predictive).
-    """
-    M = predictive.M
-    tu_per_w = np.zeros(M)
-    for m in range(M):
-        comp = _component_distribution(predictive, m)
-        v_w, tvd = _v_alpha_and_tvd(comp, predictive, alpha, n_grid=n_grid)
-        tu_per_w[m] = v_w / (1 - tvd)
-    return float(predictive.weights @ tu_per_w)
+#     Predicting model = each ensemble component w; truth approx = bar_p (predictive).
+#     """
+#     M = predictive.M
+#     tu_per_w = np.zeros(M)
+#     for m in range(M):
+#         comp = _component_distribution(predictive, m)
+#         v_w, tvd = _v_alpha_and_tvd(comp, predictive, alpha, n_grid=n_grid)
+#         tu_per_w[m] = v_w / (1 - tvd)
+#     return float(predictive.weights @ tu_per_w)
 
 
-def quest_eu_local_c2(predictive: GaussianMixture1D, alpha: float) -> float:
-    """C2 local EU as TU - AU (per Schweighofer framework)."""
-    return quest_tu_local_c2(predictive, alpha) - quest_au_local_c2(predictive, alpha)
+# def quest_eu_local_c2(predictive: GaussianMixture1D, alpha: float) -> float:
+#     """C2 local EU as TU - AU (per Schweighofer framework)."""
+#     return quest_tu_local_c2(predictive, alpha) - quest_au_local_c2(predictive, alpha)
 
 
 # ----- C3 plug-in: both predicting and truth-approx marginalized over posterior -----
@@ -325,17 +441,17 @@ def quest_eu_local_c2(predictive: GaussianMixture1D, alpha: float) -> float:
 
 # ----- C2/C3 global plug-ins (disabled via line-comments below) -----
 
-def quest_au_global_c2(predictive: GaussianMixture1D, n_alpha: int = 30) -> float:
-    """C2 global AU: integral of E_w[V_alpha(p_w)] over alpha."""
-    alphas = np.linspace(0.01, 0.99, n_alpha)
-    vals = np.array([quest_au_local_c2(predictive, a) for a in alphas])
-    return float(np.trapz(vals, alphas))
+# def quest_au_global_c2(predictive: GaussianMixture1D, n_alpha: int = 30) -> float:
+#     """C2 global AU: integral of E_w[V_alpha(p_w)] over alpha."""
+#     alphas = np.linspace(0.01, 0.99, n_alpha)
+#     vals = np.array([quest_au_local_c2(predictive, a) for a in alphas])
+#     return float(np.trapz(vals, alphas))
 
 
-def quest_tu_global_c2(predictive: GaussianMixture1D, n_alpha: int = 30) -> float:
-    alphas = np.linspace(0.01, 0.99, n_alpha)
-    vals = np.array([quest_tu_local_c2(predictive, a) for a in alphas])
-    return float(np.trapz(vals, alphas))
+# def quest_tu_global_c2(predictive: GaussianMixture1D, n_alpha: int = 30) -> float:
+#     alphas = np.linspace(0.01, 0.99, n_alpha)
+#     vals = np.array([quest_tu_local_c2(predictive, a) for a in alphas])
+#     return float(np.trapz(vals, alphas))
 
 
 # def quest_tu_global_c3(predictive: GaussianMixture1D, n_alpha: int = 30) -> float:
@@ -344,8 +460,8 @@ def quest_tu_global_c2(predictive: GaussianMixture1D, n_alpha: int = 30) -> floa
 #     return float(np.trapz(vals, alphas))
 
 
-def quest_eu_global_c2(predictive: GaussianMixture1D, n_alpha: int = 30) -> float:
-    return quest_tu_global_c2(predictive, n_alpha) - quest_au_global_c2(predictive, n_alpha)
+# def quest_eu_global_c2(predictive: GaussianMixture1D, n_alpha: int = 30) -> float:
+#     return quest_tu_global_c2(predictive, n_alpha) - quest_au_global_c2(predictive, n_alpha)
 
 
 # def quest_eu_global_c3(predictive: GaussianMixture1D, n_alpha: int = 30) -> float:

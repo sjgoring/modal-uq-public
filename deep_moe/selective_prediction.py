@@ -33,9 +33,10 @@ from measures import (
     quest_au_local, quest_au_global,
     quest_eu_local, quest_eu_global,
     quest_tu_local, quest_tu_global,
-    quest_au_local_c2, quest_au_global_c2,
-    quest_tu_local_c2, quest_tu_global_c2,
-    quest_eu_local_c2, quest_eu_global_c2,
+    # C2 plug-ins are commented out in measures.py.
+    # quest_au_local_c2, quest_au_global_c2,
+    # quest_tu_local_c2, quest_tu_global_c2,
+    # quest_eu_local_c2, quest_eu_global_c2,
 )
 
 
@@ -64,21 +65,65 @@ class TestPointMeasures:
     quest_tu_g: float = 0.0
 
 
+def select_best_member(
+    ensemble, X_train: np.ndarray, y_train: np.ndarray
+) -> int:
+    """Select the ensemble member with highest mean training log-likelihood.
+    
+    Returns the index m_hat in {0, ..., M-1}.
+    """
+    M = ensemble.M
+    log_likelihoods = np.zeros(M)
+    for m in range(M):
+        log_likelihoods[m] = ensemble.member_log_likelihood(X_train, y_train, m)
+    return int(np.argmax(log_likelihoods))
+
+
+def make_truth_approximation(
+    x: np.ndarray,
+    noise_dist: str,
+    estimator: str,
+    ensemble=None,
+    m_hat: int = -1,
+):
+    """Build the truth approximation hat_p_star at input x.
+    
+    For 'oracle': returns a GridDensity1D for the true conditional density.
+    For 'mle': returns a GaussianMixture1D for the m_hat-th ensemble member's
+               predictive at x.
+    """
+    if estimator == "oracle":
+        return make_true_density(x, noise_dist)
+    elif estimator == "mle":
+        return ensemble.member_distribution(x, m_hat)
+    else:
+        raise ValueError(f"Unknown estimator: {estimator!r}")
+
+
 def compute_all_measures(
-    ensemble: MoEEnsemble,
+    ensemble,
     X_test: np.ndarray,
     noise_dist: str,
     estimator: str = "oracle",
+    m_hat: int = -1,
     n_alpha_global: int = 30,
     verbose: bool = False,
 ) -> list[TestPointMeasures]:
-    """Compute all UMs for every test point.
+    """Compute all UMs for every test point under the B1 framework.
+    
+    All UMs (variance, entropy, QUEST) take both:
+      - hat_p_star: truth approximation (true density for oracle; one ensemble
+                    member's predictive for MLE)
+      - bar_p:      ensemble's full posterior predictive (M*K mixture)
     
     Args:
-        estimator: "oracle" (uses true p_theta_star) or "c2" (uses ensemble bar_p).
+        estimator: "oracle" or "mle".
+        m_hat: index of the selected member (used only when estimator="mle").
     """
-    if estimator not in {"oracle", "c2"}:
+    if estimator not in {"oracle", "mle"}:
         raise ValueError(f"Unknown estimator: {estimator!r}")
+    if estimator == "mle" and m_hat < 0:
+        raise ValueError("MLE estimator requires m_hat >= 0.")
     
     n_test = X_test.shape[0]
     measures = []
@@ -86,33 +131,29 @@ def compute_all_measures(
     for i in range(n_test):
         x = X_test[i]
         m = TestPointMeasures()
-        pred = ensemble.predictive_distribution(x)
+        bar_p = ensemble.predictive_distribution(x)
+        p_hat_star = make_truth_approximation(
+            x, noise_dist, estimator, ensemble=ensemble, m_hat=m_hat,
+        )
         
-        # Variance and entropy (estimator-independent: standard C-row decomposition)
-        m.var_au = variance_au(pred)
-        m.var_eu = variance_eu(pred)
-        m.var_tu = variance_tu(pred)
-        m.ent_au = entropy_au(pred)
-        m.ent_eu = entropy_eu(pred)
-        m.ent_tu = entropy_tu(pred)
+        # Variance UMs (B1 framework)
+        m.var_au = variance_au(p_hat_star)
+        m.var_eu = variance_eu(p_hat_star, bar_p)
+        m.var_tu = variance_tu(p_hat_star, bar_p)
         
-        # QUEST: dispatch on estimator
-        if estimator == "oracle":
-            true_dist = make_true_density(x, noise_dist)
-            theta_samples = ensemble.parameter_samples(x)
-            m.quest_au_01 = quest_au_local(true_dist, alpha=0.1)
-            m.quest_eu_01 = quest_eu_local(theta_samples, alpha=0.1)
-            m.quest_tu_01 = quest_tu_local(true_dist, pred, alpha=0.1)
-            m.quest_au_g = quest_au_global(true_dist, n_alpha=n_alpha_global)
-            m.quest_eu_g = quest_eu_global(theta_samples, n_alpha=n_alpha_global)
-            m.quest_tu_g = quest_tu_global(true_dist, pred, n_alpha=n_alpha_global)
-        elif estimator == "c2":
-            m.quest_au_01 = quest_au_local_c2(pred, alpha=0.1)
-            m.quest_tu_01 = quest_tu_local_c2(pred, alpha=0.1)
-            m.quest_eu_01 = m.quest_tu_01 - m.quest_au_01
-            m.quest_au_g = quest_au_global_c2(pred, n_alpha=n_alpha_global)
-            m.quest_tu_g = quest_tu_global_c2(pred, n_alpha=n_alpha_global)
-            m.quest_eu_g = m.quest_tu_g - m.quest_au_g
+        # Entropy UMs (B1 framework)
+        m.ent_au = entropy_au(p_hat_star)
+        m.ent_eu = entropy_eu(p_hat_star, bar_p)
+        m.ent_tu = entropy_tu(p_hat_star, bar_p)
+        
+        # QUEST UMs (oracle formulas, with hat_p_star playing the role of truth)
+        theta_samples = ensemble.parameter_samples(x)
+        m.quest_au_01 = quest_au_local(p_hat_star, alpha=0.1)
+        m.quest_eu_01 = quest_eu_local(theta_samples, alpha=0.1)
+        m.quest_tu_01 = quest_tu_local(p_hat_star, bar_p, alpha=0.1)
+        m.quest_au_g = quest_au_global(p_hat_star, n_alpha=n_alpha_global)
+        m.quest_eu_g = quest_eu_global(theta_samples, n_alpha=n_alpha_global)
+        m.quest_tu_g = quest_tu_global(p_hat_star, bar_p, n_alpha=n_alpha_global)
         
         measures.append(m)
         if verbose and (i + 1) % 100 == 0:
@@ -256,11 +297,16 @@ def run_single_seed(
         bootstrap=bootstrap,
     )
     
+    # Select best member by training-set log-likelihood (used only when MLE is the
+    # estimator, but cheap enough to always compute).
+    m_hat = select_best_member(ensemble, X_train, y_train)
+    
     losses = compute_log_density_loss(X_test, ensemble, noise_dist)
     test_loss_mean = float(losses.mean())
     
     measures = compute_all_measures(
-        ensemble, X_test, noise_dist, estimator=estimator, verbose=False,
+        ensemble, X_test, noise_dist, estimator=estimator, m_hat=m_hat,
+        verbose=False,
     )
     ums = all_um_arrays(measures)
     
@@ -425,7 +471,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--noise", choices=["gaussian", "bimodal", "skewed", "all"],
                         default="all")
-    parser.add_argument("--estimator", choices=["oracle", "c2", "all"], default="all")
+    parser.add_argument("--estimator", choices=["oracle", "mle", "all"], default="all")
     parser.add_argument("--model", choices=["deep", "moe"], default="deep",
                         help="Model class for the ensemble. 'deep' uses a deep "
                              "ensemble of K-component Gaussian-mixture-output nets. "
@@ -458,7 +504,7 @@ def main():
         noise_list = ["gaussian", "bimodal", "skewed"]
     else:
         noise_list = [args.noise]
-    estimator_list = ["oracle", "c2"] if args.estimator == "all" else [args.estimator]
+    estimator_list = ["oracle", "mle"] if args.estimator == "all" else [args.estimator]
     
     for nd in noise_list:
         for est in estimator_list:
