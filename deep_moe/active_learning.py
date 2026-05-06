@@ -15,6 +15,7 @@ predictive distribution and the MLE member as the truth approximation.
 """
 
 import argparse
+import logging
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -50,6 +51,61 @@ from measures import (
 
 # Testing only
 UM_KEYS = ["var_au"]
+
+
+def setup_logger(output_dir: str, seed: int, level: int = logging.INFO) -> logging.Logger:
+    """Create a logger that writes to both console and a seed-specific log file.
+    
+    Args:
+        output_dir: Directory to save log files in.
+        seed: Seed number used to create unique log filename.
+        level: Logging level (default: INFO).
+    
+    Returns:
+        A logger instance configured with file and stream handlers.
+    """
+    output_path = Path(output_dir)
+    output_path.mkdir(parents=True, exist_ok=True)
+    
+    logger_name = f"seed_{seed}"
+    logger = logging.getLogger(logger_name)
+    logger.setLevel(level)
+    
+    # Remove existing handlers to avoid duplicates
+    logger.handlers.clear()
+    
+    # File handler: append mode for robustness
+    log_file = output_path / f"log_seed_{seed}.txt"
+    file_handler = logging.FileHandler(log_file, mode='a')
+    file_handler.setLevel(level)
+    
+    # Stream handler: write to console
+    stream_handler = logging.StreamHandler()
+    stream_handler.setLevel(level)
+    
+    # Formatter: include timestamp and seed context
+    formatter = logging.Formatter(
+        fmt='[%(asctime)s] [seed %(name)s] %(message)s',
+        datefmt='%H:%M:%S'
+    )
+    file_handler.setFormatter(formatter)
+    stream_handler.setFormatter(formatter)
+    
+    logger.addHandler(file_handler)
+    logger.addHandler(stream_handler)
+    
+    return logger
+
+
+def log_print(logger: logging.Logger, msg: str) -> None:
+    """Log a message to console and file via the provided logger.
+    
+    Handles None logger gracefully (falls back to print).
+    """
+    if logger is not None:
+        logger.info(msg)
+    else:
+        print(msg)
 
 
 @dataclass
@@ -423,6 +479,7 @@ def run_single_seed(
     K: int,
     model: str = "deep",
     dataset: str = "dgp",
+    logger: logging.Logger = None,
     # Deep ensemble hyperparameters:
     hidden_dim: int = 32,
     n_hidden: int = 2,
@@ -482,7 +539,7 @@ def run_single_seed(
         curve = []
 
         for round_idx in range(n_rounds + 1):
-            print(f" Time {time.strftime('%H:%M:%S')}, Seed {seed}, measure {measure_name}, begin round {round_idx}/{n_rounds}")
+            log_print(logger, f" Time {time.strftime('%H:%M:%S')}, Seed {seed}, measure {measure_name}, begin round {round_idx}/{n_rounds}")
             ensemble = build_and_fit_model(
                 X_pool[labeled_indices],
                 y_pool[labeled_indices],
@@ -498,7 +555,7 @@ def run_single_seed(
                 entropy_bonus=entropy_bonus,
                 bootstrap=bootstrap,
             )
-            print(f" Time {time.strftime('%H:%M:%S')}, Seed {seed}, measure {measure_name}, finished training model for round {round_idx}/{n_rounds}")
+            log_print(logger, f" Time {time.strftime('%H:%M:%S')}, Seed {seed}, measure {measure_name}, finished training model for round {round_idx}/{n_rounds}")
 
             eval_metrics = _evaluate_learning_quality(ensemble, X_eval, y_eval, noise_dist)
             curve.append(
@@ -510,7 +567,7 @@ def run_single_seed(
                 }
             )
 
-            print(f" Time {time.strftime('%H:%M:%S')}, Seed {seed}, measure {measure_name}, evaluated round {round_idx}/{n_rounds} with mode_abs_error={curve[-1]['mode_abs_error']:.4f}")
+            log_print(logger, f" Time {time.strftime('%H:%M:%S')}, Seed {seed}, measure {measure_name}, evaluated round {round_idx}/{n_rounds} with mode_abs_error={curve[-1]['mode_abs_error']:.4f}")
 
             if round_idx == n_rounds or len(unlabeled_indices) == 0:
                 continue
@@ -534,7 +591,7 @@ def run_single_seed(
                 )
                 scores = all_um_arrays(measures)[measure_name]
 
-            print(f" Time {time.strftime('%H:%M:%S')}, Seed {seed}, measure {measure_name}, computed scores for round {round_idx}/{n_rounds}, selecting top {batch_size_round} points to label")
+            log_print(logger, f" Time {time.strftime('%H:%M:%S')}, Seed {seed}, measure {measure_name}, computed scores for round {round_idx}/{n_rounds}, selecting top {batch_size_round} points to label")
 
             selected_local = _select_top_indices(scores, batch_size_round)
             selected_indices = [unlabeled_indices[idx] for idx in selected_local]
@@ -542,8 +599,8 @@ def run_single_seed(
             selected_set = set(selected_indices)
             unlabeled_indices = [idx for idx in unlabeled_indices if idx not in selected_set]
 
-            print(f" Time {time.strftime('%H:%M:%S')}, Seed {seed}, measure {measure_name}, completed round {round_idx}/{n_rounds} with {len(labeled_indices)} labeled points and {len(unlabeled_indices)} unlabeled points remaining")
-            print("-" * 80)
+            log_print(logger, f" Time {time.strftime('%H:%M:%S')}, Seed {seed}, measure {measure_name}, completed round {round_idx}/{n_rounds} with {len(labeled_indices)} labeled points and {len(unlabeled_indices)} unlabeled points remaining")
+            log_print(logger, "-" * 80)
 
         per_measure_results.append({"measure": measure_name, "curve": curve})
 
@@ -623,15 +680,18 @@ def run_experiment(
     # MoE hyperparameters:
     bootstrap: bool = True,
 ) -> dict:
-    print("=" * 60)
-    print(f"Experiment: active learning, 1D DGP, {noise_dist} noise")
-    print(f"  model={model}, M={M}, K={K}")
+    # Create main logger for experiment orchestration
+    main_logger = setup_logger(output_dir, seed=0, level=logging.INFO)
+    
+    log_print(main_logger, "=" * 60)
+    log_print(main_logger, f"Experiment: active learning, 1D DGP, {noise_dist} noise")
+    log_print(main_logger, f"  model={model}, M={M}, K={K}")
     if model == "deep":
-        print(f"  hidden_dim={hidden_dim}, n_hidden={n_hidden}, n_epochs={n_epochs}, "
+        log_print(main_logger, f"  hidden_dim={hidden_dim}, n_hidden={n_hidden}, n_epochs={n_epochs}, "
               f"entropy_bonus={entropy_bonus}")
-    print(f"  pool_size={n_train}, eval_size={n_test}, d_init={d_init}, n_rounds={n_rounds}")
-    print(f"  n_seeds={n_seeds}, n_jobs={n_jobs}")
-    print("=" * 60)
+    log_print(main_logger, f"  pool_size={n_train}, eval_size={n_test}, d_init={d_init}, n_rounds={n_rounds}")
+    log_print(main_logger, f"  n_seeds={n_seeds}, n_jobs={n_jobs}")
+    log_print(main_logger, "=" * 60)
     
     t0 = time.time()
     seeds = [base_seed + i for i in range(n_seeds)]
@@ -647,17 +707,18 @@ def run_experiment(
     if n_jobs == 1:
         per_seed_results = []
         for s in seeds:
+            seed_logger = setup_logger(output_dir, seed=s, level=logging.INFO)
             t_seed = time.time()
-            res = run_single_seed(seed=s, dataset=dataset, **common_kwargs)
+            res = run_single_seed(seed=s, dataset=dataset, logger=seed_logger, **common_kwargs)
             per_seed_results.append(res)
-            print(f"    Seed {s} took {time.time() - t_seed:.1f}s")
+            log_print(main_logger, f"    Seed {s} took {time.time() - t_seed:.1f}s")
     else:
         per_seed_results = Parallel(n_jobs=n_jobs, verbose=10)(
-            delayed(run_single_seed)(seed=s, dataset=dataset, **common_kwargs) for s in seeds
+            delayed(run_single_seed)(seed=s, dataset=dataset, logger=setup_logger(output_dir, seed=s), **common_kwargs) for s in seeds
         )
     
     elapsed = time.time() - t0
-    print(f"  All seeds done in {elapsed:.1f}s ({elapsed / n_seeds:.1f}s/seed avg).")
+    log_print(main_logger, f"  All seeds done in {elapsed:.1f}s ({elapsed / n_seeds:.1f}s/seed avg.)")
     
     agg = aggregate_seeds(per_seed_results)
     agg["noise_dist"] = noise_dist
@@ -684,15 +745,15 @@ def run_experiment(
     out_name = "results_mpe_active_learning.npz" if dataset == "mpe" else f"results_{noise_dist}_active_learning.npz"
     out_file = output_path / out_name
     np.savez(out_file, **save_dict)
-    print(f"  Aggregated results saved to {out_file}")
+    log_print(main_logger, f"  Aggregated results saved to {out_file}")
     
-    print("\nFinal-round mode absolute error (lower is better)")
-    print(f"{'Measure':<24} {'Mean':<12} {'SE':<12}")
-    print("-" * 50)
+    log_print(main_logger, "\nFinal-round mode absolute error (lower is better)")
+    log_print(main_logger, f"{'Measure':<24} {'Mean':<12} {'SE':<12}")
+    log_print(main_logger, "-" * 50)
     for measure_name in agg["measure_names"]:
         mean = agg["final_metric_mean"]["mode_abs_error"][measure_name]
         se = agg["final_metric_se"]["mode_abs_error"][measure_name]
-        print(f"{measure_name:<24} {mean:<12.4f} {se:<12.4f}")
+        log_print(main_logger, f"{measure_name:<24} {mean:<12.4f} {se:<12.4f}")
     
     return agg
 
