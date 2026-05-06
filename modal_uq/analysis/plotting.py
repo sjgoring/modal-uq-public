@@ -11,14 +11,14 @@ def _ensure_dir(path):
     os.makedirs(os.path.dirname(path), exist_ok=True)
 
 
-def plot_al_learning_curve(metric_df, out_path, title="Learning Curve"):
+def plot_al_learning_curve(metric_df, out_path, title="Learning Curve", x_label="Round", y_label="Metric"):
     """metric_df: pandas.DataFrame with index=rounds (or labelled size) and columns=metrics"""
     _ensure_dir(out_path)
     fig, ax = plt.subplots(figsize=(6,4))
     for col in metric_df.columns:
         ax.plot(metric_df.index, metric_df[col], marker='o', label=col)
-    ax.set_xlabel('Round')
-    ax.set_ylabel('Metric')
+    ax.set_xlabel(x_label)
+    ax.set_ylabel(y_label)
     ax.set_title(title)
     ax.legend()
     fig.tight_layout()

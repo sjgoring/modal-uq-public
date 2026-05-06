@@ -98,6 +98,8 @@ class Ensemble(ModelBase):
         
         # Compute member losses for criterion-based selection
         print (" Skipping member loss computation")
+        # TODO: Implement this only if required (inferential_choice point estimate)
+        # TODO: Speed up. Currently taking a very long time.
         # self._compute_member_losses(X, y)
 
     def _compute_member_losses(self, X, y, y_grid=None):

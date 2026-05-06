@@ -1,13 +1,18 @@
 
 import os
+import datetime
 import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
 from .base import ExperimentBase
-from ..registry import build
-from ..analysis.correlation import compute_uncertainty_scores, correlation_suite, save_correlation_artifacts
+from ..analysis.correlation import compute_uncertainty_scores
+from ..metrics.common import nll_from_density_at_truth
 from ..utils.io import write_json
 from ..utils.logging import get_logger
 from ..utils.seed import resolve_seed
 from ..analysis import plotting
+from ..datasets.synthetic_constant_var import SyntheticConstantVarDataset
+from ..datasets.mpe import MpeDataset
 
 class ActiveLearning(ExperimentBase):
     def __init__(self, ds, pgt, model, metrics, cfg, n_jobs=None):
@@ -16,183 +21,234 @@ class ActiveLearning(ExperimentBase):
         Caches the dataset-provided y_grid if available (for synthetic datasets with canonical grid).
         """
         super().__init__(ds, pgt, model, metrics, cfg, n_jobs)
-        # Cache canonical y_grid from dataset if available (for uncertainty scoring consistency)
         self.y_grid = getattr(ds, 'y_grid', None)
+
+    def _al_config(self):
+        return self.cfg.get('experiment', {}).get('al', {})
+
+    def _supported_dataset_kind(self):
+        if type(self.ds) is SyntheticConstantVarDataset:
+            return 'synthetic_constant_var'
+        if type(self.ds) is MpeDataset:
+            return 'mpe'
+        raise NotImplementedError(
+            "Active learning currently supports only SyntheticConstantVarDataset and MpeDataset."
+        )
+
+    def _prepare_dataset(self):
+        kind = self._supported_dataset_kind()
+        if kind == 'synthetic_constant_var':
+            X_pool = np.asarray(self.ds.X_train).copy()
+            y_pool = np.asarray(self.ds.y_train).copy()
+            X_eval = np.asarray(self.ds.X_test).copy()
+            y_eval = np.asarray(self.ds.y_test).copy()
+            y_grid = np.asarray(self.ds.y_grid)
+            fit_y = np.expand_dims(y_pool, axis=1)
+            eval_bundle = {'X': X_eval, 'y': y_eval, 'kind': kind}
+            return X_pool, y_pool, fit_y, y_grid, eval_bundle
+
+        n_traj = int(self.ds.y_train.shape[1])
+        X_pool = np.repeat(np.asarray(self.ds.X_train), n_traj, axis=0)
+        y_pool = np.asarray(self.ds.y_train).reshape(-1)
+        X_eval = np.asarray(self.ds.X_test).copy()
+        y_eval = np.asarray(self.ds.y_test).copy()
+        y_grid = np.asarray(self.ds.y_grid)
+        fit_y = np.expand_dims(y_pool, axis=1)
+        eval_bundle = {'X': X_eval, 'y': y_eval, 'kind': kind, 'n_traj': n_traj}
+        return X_pool, y_pool, fit_y, y_grid, eval_bundle
+
+    def _budget_schedule(self, n_pool, init_size, rounds):
+        if rounds <= 0:
+            raise ValueError('rounds must be positive')
+        if init_size <= 0:
+            raise ValueError('init_size must be positive')
+        if init_size >= n_pool:
+            raise ValueError('init_size must be smaller than the pool size')
+
+        remaining = n_pool - init_size
+        base = remaining // rounds
+        remainder = remaining % rounds
+        return [base + 1 if idx < remainder else base for idx in range(rounds)]
+
+    def _eval_nll(self, X_eval, y_eval, y_grid, dataset_kind, n_traj=None):
+        dens = self.model.predict_density(X_eval, y_grid, context='predict')
+        if dataset_kind == 'mpe':
+            if n_traj is None:
+                raise ValueError('n_traj is required for MPE NLL evaluation')
+            y_eval_flat = np.asarray(y_eval).reshape(-1)
+            X_eval_flat = np.repeat(np.asarray(X_eval), n_traj, axis=0)
+            dens = self.model.predict_density(X_eval_flat, y_grid, context='predict')
+            nll = nll_from_density_at_truth(dens, y_grid, y_eval_flat)
+            return float(np.mean(nll))
+
+        nll = nll_from_density_at_truth(dens, y_grid, np.asarray(y_eval))
+        return float(np.mean(nll))
+
+    def _measure_label(self, spec):
+        params = dict(spec.get('params', {}))
+        return params.get('label', spec.get('name'))
+
+    def _nll_run_root(self):
+        run_root = self.cfg.get('experiment', {}).get('run_root')
+        if run_root:
+            return os.path.join(run_root, 'nll')
+        ts = datetime.datetime.now().strftime('%Y%m%d_%H%M')
+        return os.path.join('runs', '_active', ts, 'nll')
+
+    def _score_measure(self, spec, X):
+        y_grid_arg = self.y_grid if self.y_grid is not None else None
+        df_scores = compute_uncertainty_scores([spec], self.model, X, y=None, y_grid=y_grid_arg)
+        measure_label = self._measure_label(spec)
+        if measure_label not in df_scores.columns:
+            raise RuntimeError(f"Uncertainty measure '{measure_label}' did not produce a score column")
+        return np.asarray(df_scores[measure_label].values), measure_label
+
+    def _fit_model(self, X, y):
+        try:
+            self.model.fit(X, y, getattr(self.ds, 'X_val', None), getattr(self.ds, 'y_val', None))
+        except TypeError:
+            self.model.fit(X, y)
+
+    def _run_single_measure(self, spec, X_pool, fit_y, X_eval, y_eval, y_grid, budget_schedule, dataset_kind, labeled_indices, unlabeled_indices, n_traj=None):
+        measure_label = self._measure_label(spec)
+
+        history_rows = []
+        curves = []
+
+        if len(labeled_indices) == 0:
+            raise ValueError('init_size must be positive')
+
+        self._fit_model(X_pool[labeled_indices], fit_y[labeled_indices])
+        curves.append({'point_index': 0, 'labelled_budget': len(labeled_indices), 'nll': self._eval_nll(X_eval, y_eval, y_grid, dataset_kind, n_traj=n_traj)})
+
+        for round_idx, batch_size in enumerate(budget_schedule, start=1):
+            if batch_size <= 0:
+                curves.append({'point_index': round_idx, 'labelled_budget': len(labeled_indices), 'nll': self._eval_nll(X_eval, y_eval, y_grid, dataset_kind, n_traj=n_traj)})
+                continue
+
+            if len(unlabeled_indices) < batch_size:
+                batch_size = len(unlabeled_indices)
+            if batch_size == 0:
+                curves.append({'point_index': round_idx, 'labelled_budget': len(labeled_indices), 'nll': self._eval_nll(X_eval, y_eval, y_grid, dataset_kind, n_traj=n_traj)})
+                continue
+
+            scores, _ = self._score_measure(spec, X_pool[unlabeled_indices])
+            order = np.argsort(-scores)
+            selected_local = order[:batch_size]
+            selected_indices = [unlabeled_indices[idx] for idx in selected_local]
+
+            labeled_indices.extend(selected_indices)
+            selected_set = set(selected_indices)
+            unlabeled_indices = [idx for idx in unlabeled_indices if idx not in selected_set]
+
+            self._fit_model(X_pool[labeled_indices], fit_y[labeled_indices])
+            curves.append({'point_index': round_idx, 'labelled_budget': len(labeled_indices), 'nll': self._eval_nll(X_eval, y_eval, y_grid, dataset_kind, n_traj=n_traj)})
+            history_rows.append({'round': round_idx - 1, 'selected': selected_indices, 'batch_size': batch_size, 'labelled_budget': len(labeled_indices)})
+
+        return {'measure': measure_label, 'curve': curves, 'history': history_rows}
+
+    def _save_nll_outputs(self, run_root, per_measure_results):
+        os.makedirs(run_root, exist_ok=True)
+        plot_rows = []
+        summary = {'metric': 'nll', 'measures': {}}
+        curves_by_measure = {}
+
+        for result in per_measure_results:
+            measure = result['measure']
+            curve = result['curve']
+            curves_by_measure[measure] = curve
+
+            frame = pd.DataFrame(curve).set_index('labelled_budget')
+            plot_path = os.path.join(run_root, f'learning_curve_{measure}.png')
+            plotting.plot_al_learning_curve(
+                frame[['nll']],
+                plot_path,
+                title=f'Learning curve: {measure} (nll)',
+                x_label='Labelled budget',
+                y_label='Negative log likelihood'
+            )
+
+            summary['measures'][measure] = {'plot': plot_path, 'final_nll': float(frame['nll'].iloc[-1]), 'points': curve}
+
+            for row in curve:
+                plot_rows.append({
+                    'metric': 'nll',
+                    'measure': measure,
+                    'point_index': int(row['point_index']),
+                    'labelled_budget': int(row['labelled_budget']),
+                    'nll': float(row['nll']),
+                })
+
+        combined_path = os.path.join(run_root, 'learning_curve_measures.png')
+        os.makedirs(os.path.dirname(combined_path), exist_ok=True)
+        fig, ax = plt.subplots(figsize=(8, 6))
+        plotted_any = False
+        for measure, curve in curves_by_measure.items():
+            x_values = [row['labelled_budget'] for row in curve]
+            y_values = [row['nll'] for row in curve]
+            ax.plot(x_values, y_values, marker='o', linewidth=1, label=measure)
+            plotted_any = True
+        if plotted_any:
+            ax.set_xlabel('Labelled budget')
+            ax.set_ylabel('Negative log likelihood')
+            ax.set_title('Learning curves (all measures) - nll')
+            ax.legend(loc='best')
+            ax.grid(True, linestyle='--', alpha=0.4)
+            fig.tight_layout()
+            fig.savefig(combined_path, dpi=150)
+        plt.close(fig)
+
+        csv_path = os.path.join(run_root, 'combined_curve_data.csv')
+        pd.DataFrame(plot_rows).to_csv(csv_path, index=False)
+        summary['combined_plot'] = combined_path
+        summary['combined_csv'] = csv_path
+        write_json(summary, os.path.join(run_root, 'nll_summary.json'))
+        return summary
     
     def run(self):
         logger = get_logger(__name__)
-        al_cfg = self.cfg.get('experiment', {}).get('al', {"init_size": 20, "batch": 5, "rounds": 10, "acquisition": "variance"})
-        init_size = al_cfg.get('init_size', 20)
-        batch = al_cfg.get('batch', 5)
-        rounds = al_cfg.get('rounds', 10)
-        acq_name = al_cfg.get('acquisition','variance')
-        acq_params = al_cfg.get('acquisition_params', {})
-        acq = build('acquisition', acq_name, **acq_params)
+        al_cfg = self._al_config()
+        init_size = int(al_cfg.get('init_size', 20))
+        rounds = int(al_cfg.get('rounds', 10))
 
-        # reproducible RNG from experiment seed
         seed = resolve_seed(self.cfg.get('experiment', {}).get('seed'))
         rng = np.random.default_rng(seed)
 
-        if not hasattr(self.ds, 'X_train') or not hasattr(self.ds, 'y_train'):
-            self.ds._setup_test_train_split()  # ensure dataset has train/test split for AL loop
-
-        X_pool, y_pool = self.ds.X_train.copy(), self.ds.y_train.copy()
+        X_pool, y_pool, fit_y, y_grid, eval_bundle = self._prepare_dataset()
         n_pool = len(X_pool)
-        idx = rng.permutation(n_pool)
-        L_idx = idx[:init_size].tolist()
-        U_idx = idx[init_size:].tolist()
+        budget_schedule = self._budget_schedule(n_pool, init_size, rounds)
+        pool_order = rng.permutation(n_pool)
+        labeled_indices = pool_order[:init_size].tolist()
+        unlabeled_indices = pool_order[init_size:].tolist()
 
-        # tracking structures
-        acq_scores_by_round = []
-        selection_matrix = np.zeros((n_pool, rounds), dtype=bool)
-        metric_rows = []
-        df_by_round = []
+        unc_cfg = self.cfg.get('uncertainty', {})
+        measure_specs = list(unc_cfg.get('measures', []))
+        if not measure_specs:
+            raise ValueError('Active learning requires at least one uncertainty measure')
 
-        # initial fit on labelled set
-        history = []
-        if len(L_idx) > 0:
-            X_L_init, y_L_init = X_pool[L_idx], y_pool[L_idx]
-            self.model.fit(X_L_init, y_L_init)
+        dataset_kind = eval_bundle['kind']
+        X_eval = eval_bundle['X']
+        y_eval = eval_bundle['y']
+        n_traj = eval_bundle.get('n_traj')
 
-        # evaluation set for metrics
-        X_eval = getattr(self.ds, 'X_test', None)
-        y_eval = getattr(self.ds, 'y_test', None)
+        per_measure_results = []
+        for spec in measure_specs:
+            measure_result = self._run_single_measure(
+                spec,
+                X_pool,
+                fit_y,
+                X_eval,
+                y_eval,
+                y_grid,
+                budget_schedule,
+                dataset_kind,
+                labeled_indices.copy(),
+                unlabeled_indices.copy(),
+                n_traj=n_traj,
+            )
+            per_measure_results.append(measure_result)
 
-        for r in range(rounds):
-            if len(U_idx) == 0:
-                logger.info("Unlabelled pool empty at round %s, stopping.", r)
-                break
-
-            # cap batch size to remaining pool
-            curr_batch = min(batch, len(U_idx))
-
-            # compute acquisition scores for unlabeled pool
-            scores = acq.score(self.model, X_pool[U_idx])
-            scores = np.asarray(scores).ravel()
-            if scores.ndim != 1 or scores.shape[0] != len(U_idx):
-                raise RuntimeError(f"Acquisition `score` must return 1D array of length {len(U_idx)}; got shape {scores.shape}")
-
-            acq_scores_by_round.append(scores.copy())
-
-            top = np.argsort(-scores)[:curr_batch]
-            new_idx = [U_idx[i] for i in top]
-            selected_scores = [float(scores[i]) for i in top]
-
-            # mark selections in matrix
-            for i in new_idx:
-                selection_matrix[i, r] = True
-
-            # update labelled / unlabelled sets
-            L_idx.extend(new_idx)
-            U_idx = [u for i,u in enumerate(U_idx) if i not in top]
-
-            # fit model with newly extended labelled set
-            X_L, y_L = X_pool[L_idx], y_pool[L_idx]
-            self.model.fit(X_L, y_L)
-
-            # compute evaluation metric and uncertainty scores on held-out eval set if available
-            if X_eval is not None and y_eval is not None:
-                try:
-                    # try predict_moments to get mean prediction
-                    y_grid = self.model.default_y_grid(X_eval)
-                    Ey, Var = self.model.predict_moments(X_eval, y_grid)
-                    preds = Ey
-                except Exception:
-                    pred_fn = getattr(self.model, 'predict', None)
-                    if pred_fn is not None:
-                        preds = pred_fn(X_eval)
-                    else:
-                        preds = None
-
-                if preds is not None:
-                    rmse = float(np.sqrt(np.mean((preds - y_eval)**2)))
-                    metric_rows.append({'round': r, 'rmse': rmse, 'L_size': len(L_idx)})
-                else:
-                    metric_rows.append({'round': r, 'L_size': len(L_idx)})
-
-                # compute uncertainty scores
-                unc_cfg = self.cfg.get('uncertainty')
-                if unc_cfg:
-                    try:
-                        y_grid_arg = self.y_grid if hasattr(self, 'y_grid') and self.y_grid is not None else None
-                        df_scores = compute_uncertainty_scores(unc_cfg['measures'], self.model, X_eval, y_eval, y_grid=y_grid_arg)
-                        errors = np.abs(preds - y_eval) if preds is not None else np.zeros(len(X_eval))
-                        df_by_round.append((df_scores, errors))
-                    except Exception as e:
-                        logger.warning("Failed to compute per-round uncertainty scores at round %s: %s", r, e)
-
-            history.append({'round': r, 'L_size': len(L_idx), 'selected': new_idx, 'selected_scores': selected_scores})
-            logger.info("Round %d: selected %d samples, labelled size now %d", r, len(new_idx), len(L_idx))
-
-        unc_cfg = self.cfg.get('uncertainty')
-        # persist results
-        self.results = {'history': history}
-        run_root = self.cfg.get('experiment', {}).get('run_root')
-        if run_root:
-            write_json(self.results, os.path.join(run_root, 'al_history.json'))
-            # save acquisition scores and selection matrix
-            try:
-                import numpy as _np
-                _np.save(os.path.join(run_root, 'acq_scores_by_round.npy'), acq_scores_by_round, allow_pickle=True)
-                _np.save(os.path.join(run_root, 'selection_matrix.npy'), selection_matrix)
-            except Exception:
-                logger.warning("Failed to persist AL arrays to run_root")
-
-        if unc_cfg and len(U_idx) > 0:
-            y_grid_arg = self.y_grid if hasattr(self, 'y_grid') and self.y_grid is not None else None
-            df_scores = compute_uncertainty_scores(unc_cfg['measures'], self.model, X_pool[U_idx], y_pool[U_idx], y_grid=y_grid_arg)
-            corr_cfg = self.cfg.get('correlation', {})
-            if corr_cfg.get('enabled', False):
-                corrs, _ = correlation_suite(df_scores, corr_cfg.get('method', ['pearson','spearman']))
-                if run_root:
-                    out_dir = os.path.join(run_root, 'correlation', 'al_pool')
-                else:
-                    out_dir = corr_cfg.get('output_dir', 'runs/_correlation') + '/al_pool'
-                save_correlation_artifacts(df_scores, corrs, out_dir)
-
-        # plotting
-        plotting_cfg = self.cfg.get('experiment', {}).get('plotting', {'enabled': True})
-        if plotting_cfg.get('enabled', True) and run_root:
-            plots_dir = os.path.join(run_root, plotting_cfg.get('dir', 'plots'), 'al')
-            os.makedirs(plots_dir, exist_ok=True)
-            # learning curve
-            try:
-                import pandas as _pd
-                if len(metric_rows) > 0:
-                    metric_df = _pd.DataFrame(metric_rows).set_index('round')
-                    plotting.plot_al_learning_curve(metric_df[['rmse']] if 'rmse' in metric_df.columns else metric_df,
-                                                    os.path.join(plots_dir, 'learning_curve.png'))
-            except Exception as e:
-                logger.warning("Failed to create AL learning curve plot: %s", e)
-
-            # acquisition distributions
-            try:
-                plotting.plot_al_acquisition_distributions(acq_scores_by_round, os.path.join(plots_dir, 'acquisition_dists.png'))
-            except Exception as e:
-                logger.warning("Failed to create AL acquisition distribution plot: %s", e)
-
-            # selection timeline
-            try:
-                plotting.plot_al_selection_timeline(selection_matrix, os.path.join(plots_dir, 'selection_timeline.png'))
-            except Exception as e:
-                logger.warning("Failed to create AL selection timeline plot: %s", e)
-
-            # uncertainty vs error for first measure
-            try:
-                if len(df_by_round) > 0:
-                    first_measure = unc_cfg['measures'][0].get('params', {}).get('label', unc_cfg['measures'][0]['name'])
-                    plotting.plot_al_uncertainty_vs_error(df_by_round, first_measure, os.path.join(plots_dir, f'uncertainty_vs_error_{first_measure}.png'))
-            except Exception as e:
-                logger.warning("Failed to create AL uncertainty vs error plot: %s", e)
-
-        if unc_cfg and len(U_idx) > 0:
-            df_scores = compute_uncertainty_scores(unc_cfg['measures'], self.model, X_pool[U_idx], y_pool[U_idx])
-            corr_cfg = self.cfg.get('correlation', {})
-            if corr_cfg.get('enabled', False):
-                corrs, _ = correlation_suite(df_scores, corr_cfg.get('method', ['pearson','spearman']))
-                if run_root:
-                    out_dir = os.path.join(run_root, 'correlation', 'al_pool')
-                else:
-                    out_dir = corr_cfg.get('output_dir', 'runs/_correlation') + '/al_pool'
-                save_correlation_artifacts(df_scores, corrs, out_dir)
-        logger.info("Active learning finished; history length=%d", len(history))
+        run_root = self._nll_run_root()
+        summary = self._save_nll_outputs(run_root, per_measure_results)
+        self.results = summary
+        logger.info('Active learning finished; measures=%d, output=%s', len(per_measure_results), run_root)

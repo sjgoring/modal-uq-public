@@ -23,6 +23,7 @@ from ..pgt.conditional_kde import ConditionalKDE
 # from ..models.mdn import MixtureDensityModel
 from ..models.ensemble import Ensemble
 from ..models.condGMM import CondGMM
+from ..models.oracle import Oracle
 # from ..models.bnn_vi import BayesianNNVI
 # from ..models.gp import GaussianProcessModel
 
@@ -94,6 +95,9 @@ def run_from_config(config_path: str):
             # ---- Model ----
             model_cfg = cfg['model']
             model_params = dict(model_cfg.get('params', {}))
+            # If Oracle give the dataset to the model for direct access to GT densities
+            if model_cfg['name'] == 'oracle':
+                model_params['data_set'] = ds
             if 'inferential_choice' in model_cfg:
                 model_params['inferential_choice'] = model_cfg['inferential_choice']
             model = build('model', model_cfg['name'], **model_params)

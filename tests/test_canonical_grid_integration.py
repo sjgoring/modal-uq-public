@@ -122,16 +122,26 @@ def test_selective_experiment_propagates_y_grid_to_uncertainty():
 
 
 def test_active_learning_propagates_y_grid_to_uncertainty():
-    """Integration test: ActiveLearning passes its cached y_grid to uncertainty measures."""
-    # This is an architectural test - verifying the pipeline is set up correctly
+    """Integration test: ActiveLearning passes its cached y_grid into measure scoring."""
+    from modal_uq.datasets.synthetic_constant_var import SyntheticConstantVarDataset
     from modal_uq.experiments.active_learning import ActiveLearning
-    
-    # Verify that active_learning.py calls compute_uncertainty_scores with y_grid argument
-    import inspect
-    source = inspect.getsource(ActiveLearning.run)
-    assert 'y_grid_arg' in source, "active_learning.py should compute y_grid_arg"
-    assert 'compute_uncertainty_scores' in source, "active_learning.py should call compute_uncertainty_scores"
-    assert 'y_grid=y_grid_arg' in source, "active_learning.py should pass y_grid to compute_uncertainty_scores"
+
+    ds = SyntheticConstantVarDataset(n_samples=30, y_grid_size=64, seed=7, split_seed=7)
+    al = ActiveLearning(ds, Mock(), Mock(), {}, {'experiment': {}, 'uncertainty': {}}, n_jobs=1)
+
+    captured = {}
+
+    def fake_compute_uncertainty_scores(measure_specs, model, X, y=None, y_grid=None):
+        captured['y_grid'] = y_grid
+        label = measure_specs[0].get('params', {}).get('label', measure_specs[0]['name'])
+        return pd.DataFrame({label: np.linspace(1.0, 0.0, len(X))})
+
+    with patch('modal_uq.experiments.active_learning.compute_uncertainty_scores', side_effect=fake_compute_uncertainty_scores):
+        scores, label = al._score_measure({'name': 'variance', 'params': {'label': 'variance_total'}}, ds.X_test[:5])
+
+    assert label == 'variance_total'
+    assert len(scores) == 5
+    assert captured['y_grid'] is ds.y_grid
 
 
 def test_canonical_grid_backward_compatible():
