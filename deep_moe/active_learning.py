@@ -167,6 +167,7 @@ def compute_all_measures(
     estimator: str = "oracle",
     m_hat: int = -1,
     n_alpha_global: int = 30,
+    requested_keys: set[str] | None = None,
     verbose: bool = False,
 ) -> list[TestPointMeasures]:
     """Compute all UMs for every test point under the B1 framework.
@@ -184,6 +185,25 @@ def compute_all_measures(
         raise ValueError(f"Unknown estimator: {estimator!r}")
     if estimator == "mle" and m_hat < 0:
         raise ValueError("MLE estimator requires m_hat >= 0.")
+
+    if requested_keys is None:
+        requested_keys = set(UM_KEYS)
+    else:
+        requested_keys = set(requested_keys)
+
+    need_p_hat_star = any(
+        k in requested_keys
+        for k in {
+            "var_au", "var_eu", "var_tu",
+            "ent_au", "ent_eu", "ent_tu",
+            "quest_au_01", "quest_tu_01", "quest_au_g", "quest_tu_g",
+        }
+    )
+    need_bar_p = any(
+        k in requested_keys
+        for k in {"var_eu", "var_tu", "ent_eu", "ent_tu", "quest_tu_01", "quest_tu_g"}
+    )
+    need_theta_samples = any(k in requested_keys for k in {"quest_eu_01", "quest_eu_g"})
     
     n_test = X_test.shape[0]
     measures = []
@@ -191,29 +211,43 @@ def compute_all_measures(
     for i in range(n_test):
         x = X_test[i]
         m = TestPointMeasures()
-        bar_p = ensemble.predictive_distribution(x)
-        p_hat_star = make_truth_approximation(
-            x, noise_dist, estimator, ensemble=ensemble, m_hat=m_hat,
-        )
+        bar_p = ensemble.predictive_distribution(x) if need_bar_p else None
+        p_hat_star = None
+        if need_p_hat_star:
+            p_hat_star = make_truth_approximation(
+                x, noise_dist, estimator, ensemble=ensemble, m_hat=m_hat,
+            )
         
         # Variance UMs (B1 framework)
-        m.var_au = variance_au(p_hat_star)
-        m.var_eu = variance_eu(p_hat_star, bar_p)
-        m.var_tu = variance_tu(p_hat_star, bar_p)
+        if "var_au" in requested_keys:
+            m.var_au = variance_au(p_hat_star)
+        if "var_eu" in requested_keys:
+            m.var_eu = variance_eu(p_hat_star, bar_p)
+        if "var_tu" in requested_keys:
+            m.var_tu = variance_tu(p_hat_star, bar_p)
         
         # Entropy UMs (B1 framework)
-        m.ent_au = entropy_au(p_hat_star)
-        m.ent_eu = entropy_eu(p_hat_star, bar_p)
-        m.ent_tu = entropy_tu(p_hat_star, bar_p)
+        if "ent_au" in requested_keys:
+            m.ent_au = entropy_au(p_hat_star)
+        if "ent_eu" in requested_keys:
+            m.ent_eu = entropy_eu(p_hat_star, bar_p)
+        if "ent_tu" in requested_keys:
+            m.ent_tu = entropy_tu(p_hat_star, bar_p)
         
         # QUEST UMs (oracle formulas, with hat_p_star playing the role of truth)
-        theta_samples = ensemble.parameter_samples(x)
-        m.quest_au_01 = quest_au_local(p_hat_star, alpha=0.1)
-        m.quest_eu_01 = quest_eu_local(theta_samples, alpha=0.1)
-        m.quest_tu_01 = quest_tu_local(p_hat_star, bar_p, alpha=0.1)
-        m.quest_au_g = quest_au_global(p_hat_star, n_alpha=n_alpha_global)
-        m.quest_eu_g = quest_eu_global(theta_samples, n_alpha=n_alpha_global)
-        m.quest_tu_g = quest_tu_global(p_hat_star, bar_p, n_alpha=n_alpha_global)
+        theta_samples = ensemble.parameter_samples(x) if need_theta_samples else None
+        if "quest_au_01" in requested_keys:
+            m.quest_au_01 = quest_au_local(p_hat_star, alpha=0.1)
+        if "quest_eu_01" in requested_keys:
+            m.quest_eu_01 = quest_eu_local(theta_samples, alpha=0.1)
+        if "quest_tu_01" in requested_keys:
+            m.quest_tu_01 = quest_tu_local(p_hat_star, bar_p, alpha=0.1)
+        if "quest_au_g" in requested_keys:
+            m.quest_au_g = quest_au_global(p_hat_star, n_alpha=n_alpha_global)
+        if "quest_eu_g" in requested_keys:
+            m.quest_eu_g = quest_eu_global(theta_samples, n_alpha=n_alpha_global)
+        if "quest_tu_g" in requested_keys:
+            m.quest_tu_g = quest_tu_global(p_hat_star, bar_p, n_alpha=n_alpha_global)
         
         measures.append(m)
         if verbose and (i + 1) % 100 == 0:
@@ -543,7 +577,9 @@ def run_single_seed(
         curve = []
 
         for round_idx in range(n_rounds + 1):
+            t_round_start = time.time()
             log_print(logger, f" Time {time.strftime('%H:%M:%S')}, Seed {seed}, measure {measure_name}, begin round {round_idx}/{n_rounds}")
+            t_train_start = time.time()
             ensemble = build_and_fit_model(
                 X_pool[labeled_indices],
                 y_pool[labeled_indices],
@@ -559,9 +595,12 @@ def run_single_seed(
                 entropy_bonus=entropy_bonus,
                 bootstrap=bootstrap,
             )
-            log_print(logger, f" Time {time.strftime('%H:%M:%S')}, Seed {seed}, measure {measure_name}, finished training model for round {round_idx}/{n_rounds}")
+            train_time = time.time() - t_train_start
+            log_print(logger, f" Time {time.strftime('%H:%M:%S')}, Seed {seed}, measure {measure_name}, finished training model for round {round_idx}/{n_rounds} in {train_time:.1f}s")
 
+            t_eval_start = time.time()
             eval_metrics = _evaluate_learning_quality(ensemble, X_eval, y_eval, noise_dist)
+            eval_time = time.time() - t_eval_start
             curve.append(
                 {
                     "round": round_idx,
@@ -571,26 +610,32 @@ def run_single_seed(
                 }
             )
 
-            log_print(logger, f" Time {time.strftime('%H:%M:%S')}, Seed {seed}, measure {measure_name}, evaluated round {round_idx}/{n_rounds} with mode_abs_error={curve[-1]['mode_abs_error']:.4f}")
+            log_print(logger, f" Time {time.strftime('%H:%M:%S')}, Seed {seed}, measure {measure_name}, evaluated round {round_idx}/{n_rounds} with mode_abs_error={curve[-1]['mode_abs_error']:.4f} in {eval_time:.1f}s")
 
             if round_idx == n_rounds or len(unlabeled_indices) == 0:
+                round_time = time.time() - t_round_start
+                log_print(logger, f" Time {time.strftime('%H:%M:%S')}, Seed {seed}, measure {measure_name}, completed round {round_idx}/{n_rounds} in {round_time:.1f}s (no acquisition step)")
                 continue
 
             batch_size_round = min(budget_schedule[round_idx], len(unlabeled_indices))
             if batch_size_round <= 0:
+                round_time = time.time() - t_round_start
+                log_print(logger, f" Time {time.strftime('%H:%M:%S')}, Seed {seed}, measure {measure_name}, completed round {round_idx}/{n_rounds} in {round_time:.1f}s (batch size 0)")
                 continue
 
-            m_hat = select_best_member(ensemble, X_pool[labeled_indices], y_pool[labeled_indices])
+            t_score_start = time.time()
 
             if measure_name == "random":
                 scores = rng.uniform(size=len(unlabeled_indices))
             else:
+                m_hat = select_best_member(ensemble, X_pool[labeled_indices], y_pool[labeled_indices])
                 measures = compute_all_measures(
                     ensemble,
                     X_pool[unlabeled_indices],
                     noise_dist,
                     estimator="mle",
                     m_hat=m_hat,
+                    requested_keys={measure_name},
                     verbose=False,
                 )
                 scores = all_um_arrays(measures)[measure_name]
@@ -602,8 +647,10 @@ def run_single_seed(
             labeled_indices.extend(selected_indices)
             selected_set = set(selected_indices)
             unlabeled_indices = [idx for idx in unlabeled_indices if idx not in selected_set]
+            score_time = time.time() - t_score_start
+            round_time = time.time() - t_round_start
 
-            log_print(logger, f" Time {time.strftime('%H:%M:%S')}, Seed {seed}, measure {measure_name}, completed round {round_idx}/{n_rounds} with {len(labeled_indices)} labeled points and {len(unlabeled_indices)} unlabeled points remaining")
+            log_print(logger, f" Time {time.strftime('%H:%M:%S')}, Seed {seed}, measure {measure_name}, completed round {round_idx}/{n_rounds} with {len(labeled_indices)} labeled points and {len(unlabeled_indices)} unlabeled points remaining (score/acquire {score_time:.1f}s, total {round_time:.1f}s)")
             log_print(logger, "-" * 80)
 
         per_measure_results.append({"measure": measure_name, "curve": curve})
