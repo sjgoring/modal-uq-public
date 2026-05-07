@@ -1,11 +1,20 @@
 """
-Plot selective loss curves and AURC bars from B1 framework experiments.
+Plot selective loss curves and AURC bars from selective-prediction experiments.
 
 For each estimator (oracle, MLE), produces two 3-panel figures:
 - TU plot: variance TU, entropy TU, QUEST TU (alpha=0.1, global) on each panel.
 - EU plot: variance EU, entropy EU, QUEST EU (alpha=0.1, global) on each panel.
 
 Panels are ordered: Gaussian, skewed, bimodal.
+
+Expected input files in results_dir:
+    results_<noise>_<estimator>.npz
+
+Expected NPZ keys:
+    coverages, n_seeds, test_loss_mean, test_loss_se,
+    loss_mean_<um>, loss_se_<um>, aurc_mean_<um>, aurc_se_<um>
+
+Missing files or keys are skipped gracefully and marked in the output plots.
 """
 
 import argparse
@@ -46,7 +55,15 @@ def plot_loss_curves(
     spec,
     spec_label: str,  # "TU" or "EU"
 ):
-    """Three panels in NOISE_ORDER: Gaussian, skewed, bimodal."""
+    """Plot selective loss curves for one estimator over all noise settings.
+
+    Args:
+        results_dir: Directory containing per-noise NPZ results files.
+        output_path: File path for the output PDF/figure.
+        estimator: One of {"oracle", "mle"}.
+        spec: Sequence of (um_key, label, linestyle, color).
+        spec_label: Display label such as "TU" or "EU".
+    """
     fig, axes = plt.subplots(1, 3, figsize=(15, 4.2), sharey=False)
     
     for ax, nd in zip(axes, NOISE_ORDER):
@@ -96,7 +113,7 @@ def plot_aurc_bars(
     spec,
     spec_label: str,
 ):
-    """Three-panel AURC bar charts in NOISE_ORDER."""
+    """Plot three-panel AURC bar charts in NOISE_ORDER."""
     bar_spec = [(k, label.replace(" TU", "").replace(" EU", "").strip(), color)
                 for (k, label, _ls, color) in spec]
     

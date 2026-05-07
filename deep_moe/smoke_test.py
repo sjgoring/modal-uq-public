@@ -1,8 +1,11 @@
-"""Smoke test for the v2 quest pipeline (B1 framework).
+"""Smoke test for the selective-prediction pipeline.
 
-Verifies end-to-end execution at a small scale (deep ensemble, all 3 noise types,
-both oracle and MLE estimators). Run before any real experiment to catch issues
-early.
+Runs a small end-to-end configuration (deep ensemble, three noise types, and
+both estimator choices) to catch integration issues early.
+
+Pass criteria:
+1. Expected result files are written for each noise/estimator pair.
+2. Saved AURC mean values are finite.
 """
 
 import time

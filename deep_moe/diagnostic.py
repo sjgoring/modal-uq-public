@@ -37,6 +37,22 @@ def run_diagnostic(
     # MoE hyperparameter
     bootstrap: bool = True,
 ):
+    """Train a model and compare true vs predictive conditional densities.
+
+    Produces a multi-panel PDF over fixed x-values and prints per-point
+    integrated squared error (ISE) between true and predictive densities.
+
+    Args:
+        noise_dist: Noise family from the 1D synthetic DGP.
+        model: Ensemble class, either "deep" or "moe".
+        n_train: Number of training points.
+        M: Number of ensemble members.
+        K: Components/experts per member.
+        seed: Random seed for training data and model training.
+        output_dir: Directory for generated diagnostic figures.
+        hidden_dim, n_hidden, n_epochs, entropy_bonus: Deep-ensemble settings.
+        bootstrap: Whether MoE members use bootstrap samples.
+    """
     print("=" * 60)
     print(f"DIAGNOSTIC: {noise_dist} (model={model}, n={n_train}, M={M}, K={K})")
     print("=" * 60)
@@ -82,7 +98,7 @@ def run_diagnostic(
         
         # Plot
         ax.plot(y_grid, true_density, 'k-', label='true', linewidth=2)
-        ax.plot(y_grid, pred_density, 'tab:blue', label='MoE predictive',
+        ax.plot(y_grid, pred_density, 'tab:blue', label='Model predictive',
                 linewidth=1.5, alpha=0.85)
         ax.fill_between(y_grid, 0, pred_density, color='tab:blue', alpha=0.15)
         

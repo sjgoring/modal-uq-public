@@ -25,7 +25,7 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader, TensorDataset
 
-from predictive import GaussianMixture1D
+from .predictive import GaussianMixture1D
 
 
 class GaussianMLP(nn.Module):

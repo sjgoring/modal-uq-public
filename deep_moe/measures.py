@@ -1,11 +1,9 @@
 """
 Uncertainty measures for regression.
 
-Each measure now follows the B1 estimator design from Schweighofer et al.:
-the predicting model is bar_p (the ensemble's posterior predictive), and the
-truth approximation hat_p_star is either the true conditional density (oracle)
-or a single ensemble member's predictive (MLE). Both bar_p and hat_p_star
-appear in the AU/EU/TU formulas:
+These measures use a posterior-predictive distribution bar_p and a truth
+approximation hat_p_star (either oracle density or a selected ensemble member).
+Both appear in the AU/EU/TU formulas:
 
 - Variance:
     AU = Var_{Y ~ hat_p_star}(Y)               — irreducible noise variance
@@ -25,15 +23,14 @@ appear in the AU/EU/TU formulas:
 Helper: parameter-space EU uses 2D KDE on (mu_m, log_sigma_m) summaries of each
 ensemble member's mixture, computed via DeepEnsemble.parameter_samples().
 
-The old C-row variance/entropy functions (variance_au(predictive), etc., which
-depended only on bar_p) are commented out below — they were the (C, 2) cell of
-the Schweighofer table and don't fit the B1 framework.
+Older variance/entropy variants that depended only on bar_p are left commented
+out below as legacy reference code.
 """
 
 import numpy as np
 from scipy import integrate
 
-from predictive import GaussianMixture1D, GridDensity1D, compute_hdr
+from .predictive import GaussianMixture1D, GridDensity1D, compute_hdr
 
 
 # ==================== Helpers for grid-based density operations ====================
@@ -98,7 +95,7 @@ def _kl_divergence(p, q, n_grid: int = 5000) -> float:
     return float(np.trapz(integrand, y_grid))
 
 
-# ==================== Variance-based measures (B1 framework) ====================
+# ==================== Variance-based measures ====================
 
 def variance_au(p_hat_star, n_grid: int = 5000) -> float:
     """AU = Var_{Y ~ hat_p_star}(Y). Irreducible noise variance under truth."""
@@ -126,7 +123,7 @@ def variance_tu(p_hat_star, bar_p, n_grid: int = 5000) -> float:
     )
 
 
-# ==================== Entropy-based measures (B1 framework) ====================
+# ==================== Entropy-based measures ====================
 
 def entropy_au(p_hat_star, n_grid: int = 5000) -> float:
     """AU = h(hat_p_star). Differential entropy of the truth approximation."""
@@ -148,21 +145,20 @@ def entropy_tu(p_hat_star, bar_p, n_grid: int = 5000) -> float:
     )
 
 
-# ==================== Old C-row variance/entropy (DISABLED) ====================
-# These computed AU/EU/TU based on bar_p alone (Schweighofer's (C,2) cell) and
-# are not used under the B1 framework. Preserved here in case we need them later.
+# ==================== Legacy variance/entropy (DISABLED) ====================
+# These compute AU/EU/TU from bar_p alone and are kept only as reference.
 #
 # def variance_au_old(predictive: GaussianMixture1D) -> float:
-#     """C-row AU as expected within-component variance."""
+#     """Legacy AU as expected within-component variance."""
 #     return float(predictive.weights @ predictive.sigmas ** 2)
 #
 # def variance_eu_old(predictive: GaussianMixture1D) -> float:
-#     """C-row EU as variance of component means."""
+#     """Legacy EU as variance of component means."""
 #     mean_of_means = predictive.mean()
 #     return float(predictive.weights @ (predictive.mus - mean_of_means) ** 2)
 #
 # def variance_tu_old(predictive: GaussianMixture1D) -> float:
-#     """C-row TU via law of total variance."""
+#     """Legacy TU via law of total variance."""
 #     return variance_au_old(predictive) + variance_eu_old(predictive)
 #
 # def gaussian_entropy(sigma: float) -> float:
@@ -201,6 +197,11 @@ def _v_alpha_and_tvd(
     
     Returns:
         (V_alpha_p, tvd_pq): V_alpha of p, and TVD between conditionals.
+
+    Notes:
+        If either HDR mass is numerically near zero, this returns a TVD value
+        near one to keep downstream TU computations finite and conservative.
+        TVD is also clipped to [0, 1) for numerical stability.
     """
     def _get_grid(dist):
         # GaussianMixture1D.grid(n_grid=...) and GridDensity1D.grid() differ
@@ -265,13 +266,13 @@ def quest_tu_local(
     return v_true / (1 - tvd)
 
 
-# ----- C2 plug-in is active. C3, B2, B3 plug-ins are disabled below. -----
-# To restore B2/B3/C3: remove the leading "# " from each line in the relevant section.
+# ----- Active local QUEST formulas are above; legacy alternatives are below. -----
+# To restore any legacy block, remove the leading "# " in the relevant section.
 
-# ----- C2 plug-in: predicting model = w, truth approx = predictive bar_p -----
+# ----- Legacy variant: predicting model = w, truth approx = predictive bar_p -----
 
 # def quest_au_local_c2(predictive: GaussianMixture1D, alpha: float) -> float:
-#     """C2 local AU: E_w[V_alpha(p_w)] = mean V_alpha across ensemble components."""
+#     """Legacy local AU: E_w[V_alpha(p_w)] over ensemble components."""
 #     M = predictive.M
 #     vols = np.zeros(M)
 #     for m in range(M):
@@ -286,7 +287,7 @@ def quest_tu_local(
 #     alpha: float,
 #     n_grid: int = 5000,
 # ) -> float:
-#     """C2 local TU: E_w[V_alpha(p_w) / (1 - TVD(p_w_alpha, predictive_alpha))].
+#     """Legacy local TU: E_w[V_alpha(p_w) / (1 - TVD(p_w_alpha, predictive_alpha))].
     
 #     Predicting model = each ensemble component w; truth approx = bar_p (predictive).
 #     """
@@ -300,18 +301,18 @@ def quest_tu_local(
 
 
 # def quest_eu_local_c2(predictive: GaussianMixture1D, alpha: float) -> float:
-#     """C2 local EU as TU - AU (per Schweighofer framework)."""
+#     """Legacy local EU as TU - AU."""
 #     return quest_tu_local_c2(predictive, alpha) - quest_au_local_c2(predictive, alpha)
 
 
-# ----- C3 plug-in: both predicting and truth-approx marginalized over posterior -----
+# ----- Legacy variant: both predicting and truth-approx marginalized over posterior -----
 
 # def quest_tu_local_c3(
 #     predictive: GaussianMixture1D,
 #     alpha: float,
 #     n_grid: int = 5000,
 # ) -> float:
-#     """C3 local TU: E_w[E_w_tilde[V_alpha(p_w) / (1 - TVD(p_w_alpha, p_w_tilde_alpha))]].
+#     """Legacy local TU with double averaging over posterior components.
     
 #     Both predicting model and truth approximation are sampled from the posterior
 #     (i.e., from ensemble components). We exclude the diagonal m == m_tilde where
@@ -348,58 +349,58 @@ def quest_tu_local(
 
 
 # def quest_eu_local_c3(predictive: GaussianMixture1D, alpha: float) -> float:
-#     """C3 local EU as TU - AU."""
+#     """Legacy local EU as TU - AU."""
 #     return quest_tu_local_c3(predictive, alpha) - quest_au_local_c2(predictive, alpha)
 
-# ----- end of C2/C3 local block -----
+# ----- end of legacy local block -----
 
 
-# ----- B2 plug-in: predicting model = bar_p, truth approx = bar_p -----
+# ----- Legacy variant: predicting model = bar_p, truth approx = bar_p -----
 # Both are the predictive distribution, so TVD = 0 analytically and TU = AU.
 # We avoid computing TVD numerically since it's known exactly.
 
 # def quest_au_local_b2(predictive: GaussianMixture1D, alpha: float) -> float:
-#     """B2 local AU: V_alpha of the predictive distribution bar_p."""
+#     """Legacy local AU: V_alpha of the predictive distribution bar_p."""
 #     v, _, _ = compute_hdr(predictive, alpha=alpha)
 #     return v
 
 
 # def quest_tu_local_b2(predictive: GaussianMixture1D, alpha: float) -> float:
-#     """B2 local TU: collapses to AU since the predicting model and truth approx
+#     """Legacy local TU: collapses to AU since the predicting model and truth approx
 #     are both bar_p. No need to compute TVD — it's analytically zero."""
 #     return quest_au_local_b2(predictive, alpha)
 
 
 # def quest_eu_local_b2(predictive: GaussianMixture1D, alpha: float) -> float:
-#     """B2 EU = TU - AU = 0 by construction."""
+#     """Legacy EU = TU - AU = 0 by construction."""
 #     return 0.0
 
 
 # def quest_au_global_b2(predictive: GaussianMixture1D, n_alpha: int = 30) -> float:
-#     """B2 global AU: integral of V_alpha(bar_p) over alpha."""
+#     """Legacy global AU: integral of V_alpha(bar_p) over alpha."""
 #     alphas = np.linspace(0.01, 0.99, n_alpha)
 #     vals = np.array([quest_au_local_b2(predictive, a) for a in alphas])
 #     return float(np.trapz(vals, alphas))
 
 
 # def quest_tu_global_b2(predictive: GaussianMixture1D, n_alpha: int = 30) -> float:
-#     """B2 global TU = global AU."""
+#     """Legacy global TU = global AU."""
 #     return quest_au_global_b2(predictive, n_alpha=n_alpha)
 
 
 # def quest_eu_global_b2(predictive: GaussianMixture1D, n_alpha: int = 30) -> float:
-#     """B2 global EU = 0."""
+#     """Legacy global EU = 0."""
 #     return 0.0
 
 
-# ----- B3 plug-in: predicting model = bar_p, truth approx = w ~ p(w | D) -----
+# ----- Legacy variant: predicting model = bar_p, truth approx = w ~ p(w | D) -----
 
 # def quest_tu_local_b3(
 #     predictive: GaussianMixture1D,
 #     alpha: float,
 #     n_grid: int = 5000,
 # ) -> float:
-#     """B3 local TU: E_w_tilde[V_alpha(bar_p) / (1 - TVD(bar_p_alpha, p_w_tilde_alpha))].
+#     """Legacy local TU with truth approximation averaged over posterior.
     
 #     Predicting model = bar_p (the predictive average), truth approximation = each
 #     ensemble component p_w_tilde, averaged over components.
@@ -423,7 +424,7 @@ def quest_tu_local(
 
 
 # def quest_eu_local_b3(predictive: GaussianMixture1D, alpha: float) -> float:
-#     """B3 local EU as TU - AU."""
+#     """Legacy local EU as TU - AU."""
 #     return quest_tu_local_b3(predictive, alpha) - quest_au_local_b2(predictive, alpha)
 
 
@@ -439,10 +440,10 @@ def quest_tu_local(
 
 # ----- Global versions of all three modes (integrate over alpha) -----
 
-# ----- C2/C3 global plug-ins (disabled via line-comments below) -----
+# ----- Legacy global variants (disabled via line-comments below) -----
 
 # def quest_au_global_c2(predictive: GaussianMixture1D, n_alpha: int = 30) -> float:
-#     """C2 global AU: integral of E_w[V_alpha(p_w)] over alpha."""
+#     """Legacy global AU: integral of E_w[V_alpha(p_w)] over alpha."""
 #     alphas = np.linspace(0.01, 0.99, n_alpha)
 #     vals = np.array([quest_au_local_c2(predictive, a) for a in alphas])
 #     return float(np.trapz(vals, alphas))
@@ -467,7 +468,7 @@ def quest_tu_local(
 # def quest_eu_global_c3(predictive: GaussianMixture1D, n_alpha: int = 30) -> float:
 #     return quest_tu_global_c3(predictive, n_alpha) - quest_au_global_c2(predictive, n_alpha)
 
-# ----- end of C2/C3 global block -----
+# ----- end of legacy global block -----
 
 
 def compute_hdr_on_grid(
@@ -644,8 +645,8 @@ if __name__ == "__main__":
     print(f"  Loose cluster (std=1.0):  EU = {eu_loose:.4f}")
     print(f"  (Loose should be substantially larger than tight.)")
     
-    # ---------- C2 plug-in sanity checks ----------
-    print("\nC2 plug-in sanity checks:")
+    # ---------- Legacy plug-in sanity checks ----------
+    print("\nLegacy plug-in sanity checks:")
     
     # Case 1: ensemble of identical components -> TU should equal AU
     identical = GaussianMixture1D(
@@ -654,7 +655,7 @@ if __name__ == "__main__":
     print("  Identical ensemble (M=3, all N(0,1)):")
     au_c2 = quest_au_local_c2(identical, alpha=0.5)
     tu_c2 = quest_tu_local_c2(identical, alpha=0.5)
-    print(f"    AU (C2) = {au_c2:.4f}, TU (C2) = {tu_c2:.4f}")
+    print(f"    AU (legacy) = {au_c2:.4f}, TU (legacy) = {tu_c2:.4f}")
     print(f"    (Should be approximately equal: per-component TVD vs predictive is 0.)")
     
     # Case 2: spread-out ensemble with different means -> TU > AU
@@ -664,7 +665,7 @@ if __name__ == "__main__":
     print("  Spread ensemble (mus = -2, 0, 2; sigma=1):")
     au_c2 = quest_au_local_c2(spread, alpha=0.5)
     tu_c2 = quest_tu_local_c2(spread, alpha=0.5)
-    print(f"    AU (C2) = {au_c2:.4f}, TU (C2) = {tu_c2:.4f}")
+    print(f"    AU (legacy) = {au_c2:.4f}, TU (legacy) = {tu_c2:.4f}")
     print(f"    (TU should exceed AU because individual components diverge from bar_p.)")
     
     # Case 3: more extreme disagreement
@@ -674,5 +675,5 @@ if __name__ == "__main__":
     print("  Extreme disagreement (mus = -5, 0, 5; sigma=0.5):")
     au_c2 = quest_au_local_c2(extreme, alpha=0.5)
     tu_c2 = quest_tu_local_c2(extreme, alpha=0.5)
-    print(f"    AU (C2) = {au_c2:.4f}, TU (C2) = {tu_c2:.4f}")
+    print(f"    AU (legacy) = {au_c2:.4f}, TU (legacy) = {tu_c2:.4f}")
     print(f"    (Sharp components with non-overlapping HDRs cause TVD->1; TU may inflate.)")
