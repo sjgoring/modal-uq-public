@@ -1,17 +1,17 @@
 """
-Active learning experiment for QUEST framework with MoE ensemble base.
+Active learning experiment for QUEST-style uncertainty measures.
 
-Pipeline (per seed):
-1. Generate a pool set and a held-out evaluation set from the 1D DGP.
-2. Sample an initial labeled subset D_init from the pool.
-3. Train an M-member ensemble on the labeled subset.
-4. Score unlabeled points with the existing B1 uncertainty measures.
-5. Acquire labels by ranking the pool with each measure.
-6. Retrain after each acquisition round and evaluate mode absolute error.
+This script supports both synthetic DGP and MPE-backed runs, and both deep and
+MoE ensemble models. Per seed it:
+1. Builds a pool and held-out evaluation set.
+2. Samples an initial labeled subset D_init.
+3. Trains an ensemble on labeled data.
+4. Scores unlabeled points with configured uncertainty measures.
+5. Acquires points by each ranking policy and retrains round-by-round.
+6. Tracks mode absolute error and calibration over rounds.
 
-The uncertainty calculations below are intentionally unchanged: they already
-implement the B1 inferential choices with the posterior predictive as the
-predictive distribution and the MLE member as the truth approximation.
+The current default policy set focuses on EU-family measures plus a random
+baseline. Legacy alternatives remain available in the codebase.
 """
 
 import argparse
@@ -24,23 +24,22 @@ import numpy as np
 from scipy import stats
 from joblib import Parallel, delayed
 
-from dgp import generate, make_true_density, true_conditional_density
-from moe_ensemble import MoEEnsemble
-from deep_ensemble import DeepEnsemble
-from predictive import GaussianMixture1D, GridDensity1D
-from mpe_dataset import load_mpe_dataset
-from measures import (
+from .dgp import generate, make_true_density, true_conditional_density
+from .moe_ensemble import MoEEnsemble
+from .deep_ensemble import DeepEnsemble
+from .predictive import GaussianMixture1D, GridDensity1D
+from .mpe_dataset import load_mpe_dataset
+from .measures import (
     variance_au, variance_eu, variance_tu,
     entropy_au, entropy_eu, entropy_tu,
     quest_au_local, quest_au_global,
     quest_eu_local, quest_eu_global,
     quest_tu_local, quest_tu_global,
-    # C2 plug-ins are commented out in measures.py.
+    # Legacy optional plug-ins are commented out in measures.py.
     # quest_au_local_c2, quest_au_global_c2,
     # quest_tu_local_c2, quest_tu_global_c2,
     # quest_eu_local_c2, quest_eu_global_c2,
 )
-
 
 # UM_KEYS = [
 #     "var_au", "var_eu", "var_tu",
@@ -49,8 +48,17 @@ from measures import (
 #     "quest_au_g", "quest_eu_g", "quest_tu_g",
 # ]
 
+# Min set for AL - EU
+
+UM_KEYS = [
+    "var_eu",
+    "ent_eu",
+    "quest_eu_01",
+    "quest_eu_g",
+]
+
 # Testing only
-UM_KEYS = ["var_au"]
+# UM_KEYS = ["var_au"]
 
 
 def setup_logger(output_dir: str, seed: int, level: int = logging.INFO) -> logging.Logger:
@@ -170,9 +178,9 @@ def compute_all_measures(
     requested_keys: set[str] | None = None,
     verbose: bool = False,
 ) -> list[TestPointMeasures]:
-    """Compute all UMs for every test point under the B1 framework.
+    """Compute requested uncertainty measures for every test point.
     
-    All UMs (variance, entropy, QUEST) take both:
+        All supported uncertainty measures (variance, entropy, QUEST) take both:
       - hat_p_star: truth approximation (true density for oracle; one ensemble
                     member's predictive for MLE)
       - bar_p:      ensemble's full posterior predictive (M*K mixture)
@@ -218,7 +226,7 @@ def compute_all_measures(
                 x, noise_dist, estimator, ensemble=ensemble, m_hat=m_hat,
             )
         
-        # Variance UMs (B1 framework)
+        # Variance measures
         if "var_au" in requested_keys:
             m.var_au = variance_au(p_hat_star)
         if "var_eu" in requested_keys:
@@ -226,7 +234,7 @@ def compute_all_measures(
         if "var_tu" in requested_keys:
             m.var_tu = variance_tu(p_hat_star, bar_p)
         
-        # Entropy UMs (B1 framework)
+        # Entropy measures
         if "ent_au" in requested_keys:
             m.ent_au = entropy_au(p_hat_star)
         if "ent_eu" in requested_keys:
@@ -525,6 +533,29 @@ def run_single_seed(
     # MoE hyperparameters:
     bootstrap: bool = True,
 ) -> dict:
+    """Run one active-learning trajectory for a single random seed.
+
+    Args:
+        seed: Random seed for data selection, training, and acquisition.
+        noise_dist: Synthetic DGP noise family (used when dataset="dgp").
+        n_train: Pool size cap.
+        n_test: Evaluation set size cap.
+        d_init: Initial labeled budget.
+        n_rounds: Number of acquisition rounds.
+        M: Number of ensemble members.
+        K: Components/experts per member (depends on model class).
+        model: Ensemble class, either "deep" or "moe".
+        dataset: Data source, either "dgp" or "mpe".
+        output_dir: Directory for logs and aggregate outputs.
+        logger: Optional logger instance.
+        hidden_dim, n_hidden, n_epochs, batch_size, lr, entropy_bonus:
+            Hyperparameters for deep-ensemble runs.
+        bootstrap: Whether MoE members train with bootstrap samples.
+
+    Returns:
+        Per-seed dictionary containing round-wise curves for each acquisition
+        policy and metadata needed for aggregation.
+    """
     if logger is None:
         logger = setup_logger(output_dir, seed=seed, level=logging.INFO)
 
@@ -731,6 +762,14 @@ def run_experiment(
     # MoE hyperparameters:
     bootstrap: bool = True,
 ) -> dict:
+    """Run active-learning experiments across multiple seeds and aggregate.
+
+    This function orchestrates per-seed runs, computes mean/SE summaries for
+    each metric and acquisition policy, and writes an NPZ results artifact.
+
+    Returns:
+        Aggregated dictionary with curve-level and final-round summaries.
+    """
     # Create main logger for experiment orchestration
     main_logger = setup_logger(output_dir, seed=0, level=logging.INFO)
     
@@ -778,6 +817,12 @@ def run_experiment(
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
     
+    # Saved NPZ schema:
+    # - metadata: dataset, noise_dist, d_init, n_rounds, n_seeds
+    # - per-metric, per-measure arrays:
+    #     <metric>_mean_<measure>, <metric>_se_<measure>
+    # - final-round scalars:
+    #     final_<metric>_mean_<measure>, final_<metric>_se_<measure>
     save_dict = {
         "dataset": dataset,
         "noise_dist": noise_dist,

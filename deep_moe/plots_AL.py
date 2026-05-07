@@ -6,6 +6,17 @@ per-round learning curves plus final-round summary bars for the AL metrics.
 It supports both the synthetic DGP runs and the MPE runs, which may produce
 an additional results_mpe_active_learning.npz file and can have calibration
 values that are entirely NaN.
+
+Expected input files in results_dir:
+    results_<dataset>_active_learning.npz
+
+Expected NPZ keys per metric/measure:
+    <metric>_mean_<measure>, <metric>_se_<measure>,
+    final_<metric>_mean_<measure>, final_<metric>_se_<measure>,
+    plus metadata keys {n_seeds, d_init, n_rounds}.
+
+Files with missing keys are partially skipped. Curves/bars with all-NaN values
+are omitted to avoid misleading visual summaries.
 """
 
 import argparse
@@ -68,7 +79,7 @@ def plot_metric_curves(
     output_path: str,
     metric_name: str,
 ):
-    """One panel per available result file, in a preferred order."""
+    """Plot per-round metric curves with one panel per available dataset."""
     spec = METRIC_SPECS[metric_name]
     datasets = _available_result_datasets(results_dir)
     if not datasets:
@@ -130,7 +141,7 @@ def plot_final_bars(
     output_path: str,
     metric_name: str,
 ):
-    """Final-round bar charts for each available result file."""
+    """Plot final-round bar charts for each available dataset file."""
     spec = METRIC_SPECS[metric_name]
     datasets = _available_result_datasets(results_dir)
     if not datasets:

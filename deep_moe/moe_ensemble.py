@@ -23,7 +23,7 @@ The latter is used only for QUEST's oracle EU computation.
 import numpy as np
 from cgmm import MixtureOfExpertsRegressor
 
-from predictive import GaussianMixture1D
+from .predictive import GaussianMixture1D
 
 
 def augment_features(X: np.ndarray) -> np.ndarray:

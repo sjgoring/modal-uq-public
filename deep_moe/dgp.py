@@ -18,7 +18,7 @@ densities to verify model fits.
 import numpy as np
 from scipy import stats
 
-from predictive import GridDensity1D
+from .predictive import GridDensity1D
 
 
 # ---------- DGP parameters ----------

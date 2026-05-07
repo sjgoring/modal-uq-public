@@ -1,13 +1,14 @@
 """
-Selective prediction experiment for QUEST framework with MoE ensemble base.
+Selective prediction experiment for QUEST-style uncertainty measures.
 
-Pipeline (per seed):
-1. Generate (X, y) train/test data from the 1D heteroskedastic DGP.
-2. Train an M-member MoE ensemble.
-3. For each test point, compute all UMs (variance, entropy, QUEST oracle, QUEST C2).
-4. Compute per-test-point log-density loss.
-5. Rank test points by each UM, compute selective loss curves.
-6. Compute AURC.
+This script supports both deep ensembles and MoE ensembles. For each seed it:
+1. Generates train/test data from the 1D heteroskedastic DGP.
+2. Trains an ensemble model.
+3. Computes uncertainty measures (variance, entropy, and QUEST variants) per
+   test point.
+4. Computes per-point log-density loss.
+5. Ranks points by each measure and builds selective loss curves.
+6. Summarizes performance with AURC.
 
 Loss function:
     loss(x) = log p*(y* | x) - log p*(y_hat | x)
@@ -23,17 +24,17 @@ from pathlib import Path
 import numpy as np
 from joblib import Parallel, delayed
 
-from dgp import generate, make_true_density, true_conditional_density
-from moe_ensemble import MoEEnsemble
-from deep_ensemble import DeepEnsemble
-from predictive import GridDensity1D
-from measures import (
+from .dgp import generate, make_true_density, true_conditional_density
+from .moe_ensemble import MoEEnsemble
+from .deep_ensemble import DeepEnsemble
+from .predictive import GridDensity1D
+from .measures import (
     variance_au, variance_eu, variance_tu,
     entropy_au, entropy_eu, entropy_tu,
     quest_au_local, quest_au_global,
     quest_eu_local, quest_eu_global,
     quest_tu_local, quest_tu_global,
-    # C2 plug-ins are commented out in measures.py.
+    # Legacy optional plug-ins remain commented out in measures.py.
     # quest_au_local_c2, quest_au_global_c2,
     # quest_tu_local_c2, quest_tu_global_c2,
     # quest_eu_local_c2, quest_eu_global_c2,
@@ -109,9 +110,9 @@ def compute_all_measures(
     n_alpha_global: int = 30,
     verbose: bool = False,
 ) -> list[TestPointMeasures]:
-    """Compute all UMs for every test point under the B1 framework.
+    """Compute all configured uncertainty measures for each test point.
     
-    All UMs (variance, entropy, QUEST) take both:
+        All uncertainty measures (variance, entropy, QUEST) take both:
       - hat_p_star: truth approximation (true density for oracle; one ensemble
                     member's predictive for MLE)
       - bar_p:      ensemble's full posterior predictive (M*K mixture)
@@ -136,12 +137,12 @@ def compute_all_measures(
             x, noise_dist, estimator, ensemble=ensemble, m_hat=m_hat,
         )
         
-        # Variance UMs (B1 framework)
+        # Variance measures
         m.var_au = variance_au(p_hat_star)
         m.var_eu = variance_eu(p_hat_star, bar_p)
         m.var_tu = variance_tu(p_hat_star, bar_p)
         
-        # Entropy UMs (B1 framework)
+        # Entropy measures
         m.ent_au = entropy_au(p_hat_star)
         m.ent_eu = entropy_eu(p_hat_star, bar_p)
         m.ent_tu = entropy_tu(p_hat_star, bar_p)
@@ -285,6 +286,29 @@ def run_single_seed(
     # MoE hyperparameters:
     bootstrap: bool = True,
 ) -> dict:
+    """Run one full selective-prediction experiment for a single seed.
+
+    Args:
+        seed: Random seed used for data generation and random baseline sampling.
+        noise_dist: Noise family for the synthetic DGP.
+        n_train: Number of training points.
+        n_test: Number of test points.
+        M: Number of ensemble members.
+        K: Components/experts per member (depends on model class).
+        coverages: Coverage grid used for selective curves.
+        estimator: Truth approximation choice for uncertainty measures.
+        model: Ensemble class, either "deep" or "moe".
+        hidden_dim, n_hidden, n_epochs, batch_size, lr, entropy_bonus:
+            Hyperparameters used when model="deep".
+        bootstrap: Whether MoE members use bootstrap sampling.
+
+    Returns:
+        A dictionary with per-seed outputs:
+            - seed: seed id
+            - test_loss_mean: mean pointwise loss over the full test set
+            - loss_curves: map from measure name to selective loss curve
+            - aurcs: map from measure name to AURC scalar
+    """
     X_train, y_train = generate(n=n_train, noise_dist=noise_dist, seed=seed)
     X_test, _ = generate(n=n_test, noise_dist=noise_dist, seed=seed + 100000)
     
@@ -386,6 +410,14 @@ def run_experiment(
     # MoE hyperparameters:
     bootstrap: bool = True,
 ) -> dict:
+    """Run the selective-prediction experiment across multiple seeds.
+
+    This function orchestrates per-seed runs, aggregates selective curves and
+    AURCs, and writes an NPZ results file.
+
+    Returns:
+        Aggregated dictionary containing mean/SE summaries across seeds.
+    """
     print("=" * 60)
     print(f"Experiment: 1D DGP, {noise_dist} noise")
     print(f"  model={model}, M={M}, K={K}")
@@ -431,6 +463,11 @@ def run_experiment(
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
     
+    # Saved NPZ schema:
+    # - metadata: coverages, noise_dist, estimator, n_seeds
+    # - global loss summary: test_loss_mean, test_loss_se
+    # - per-measure arrays/scalars:
+    #     loss_mean_<name>, loss_se_<name>, aurc_mean_<name>, aurc_se_<name>
     save_dict = {
         "coverages": coverages,
         "noise_dist": noise_dist,
